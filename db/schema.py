@@ -50,8 +50,23 @@ CREATE TABLE IF NOT EXISTS states (
     status TEXT DEFAULT 'active', -- active, archived
     confidence REAL DEFAULT 1.0,
     first_seen REAL DEFAULT (julianday('now')),
-    last_updated REAL DEFAULT (julianday('now')),
-    source_chunk_ids TEXT         -- JSON array of chunk ids
+    last_updated REAL DEFAULT (julianday('now'))
+);
+
+-- 4a. 状态证据关联表（多对多关系）
+CREATE TABLE IF NOT EXISTS state_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_id INTEGER NOT NULL,
+    chunk_id INTEGER,                         -- 关联的 chunk（可空）
+    extraction_id INTEGER,                    -- 关联的 extraction（可空）
+    evidence_role TEXT DEFAULT 'source',      -- 证据角色：source, supporting, contradicting
+    weight REAL DEFAULT 1.0,                  -- 证据权重（0-1）
+    note TEXT,                                -- 备注说明
+    created_at REAL DEFAULT (julianday('now')),
+    FOREIGN KEY (state_id) REFERENCES states(id) ON DELETE CASCADE,
+    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE,
+    FOREIGN KEY (extraction_id) REFERENCES extractions(id) ON DELETE CASCADE,
+    CHECK (chunk_id IS NOT NULL OR extraction_id IS NOT NULL)  -- 至少有一个关联
 );
 
 -- 5. 对象之间的关系
@@ -95,6 +110,9 @@ CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_extractions_chunk_id ON extractions(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_states_category ON states(category);
 CREATE INDEX IF NOT EXISTS idx_states_status ON states(status);
+CREATE INDEX IF NOT EXISTS idx_state_evidence_state_id ON state_evidence(state_id);
+CREATE INDEX IF NOT EXISTS idx_state_evidence_chunk_id ON state_evidence(chunk_id);
+CREATE INDEX IF NOT EXISTS idx_state_evidence_extraction_id ON state_evidence(extraction_id);
 CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_type, target_id);
 """

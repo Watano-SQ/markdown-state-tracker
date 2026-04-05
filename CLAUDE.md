@@ -82,6 +82,13 @@ status.md
    - `id`, `category`, `subtype`, `summary`, `detail`, `status`, `confidence`
    - 用途：核心状态存储，支持 active/archived
    - 分类：dynamic（动态）/ static（稳定）
+   - **注意**：不再使用 `source_chunk_ids` 字段，改用 `state_evidence` 关联表
+
+4a. **state_evidence** - 状态证据关联表（多对多）
+   - `id`, `state_id`, `chunk_id`, `extraction_id`, `evidence_role`, `weight`, `note`
+   - 用途：表达 state 与 chunk/extraction 的多对多关系
+   - 一个 state 可以有多个证据，一个 chunk 也可以支撑多个 state
+   - `evidence_role`: source（来源）, supporting（支持）, contradicting（矛盾）
 
 5. **relations** - 状态间关系
    - `id`, `source_type`, `source_id`, `target_type`, `target_id`, `relation_type`

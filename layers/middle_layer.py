@@ -70,54 +70,133 @@ def mark_document_processed(doc_id: int) -> None:
     conn.commit()
 
 
+def add_state_evidence(
+    state_id: int,
+    chunk_id: Optional[int] = None,
+    extraction_id: Optional[int] = None,
+    evidence_role: str = 'source',
+    weight: float = 1.0,
+    note: Optional[str] = None
+) -> int:
+    """添加状态证据
+    
+    Args:
+        state_id: 状态 ID
+        chunk_id: chunk ID（可选）
+        extraction_id: extraction ID（可选）
+        evidence_role: 证据角色（source, supporting, contradicting）
+        weight: 证据权重（0-1）
+        note: 备注说明
+    
+    Returns:
+        evidence_id
+    """
+    if chunk_id is None and extraction_id is None:
+        raise ValueError("At least one of chunk_id or extraction_id must be provided")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO state_evidence (state_id, chunk_id, extraction_id, evidence_role, weight, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (state_id, chunk_id, extraction_id, evidence_role, weight, note))
+    
+    evidence_id = cursor.lastrowid
+    conn.commit()
+    return evidence_id
+
+
+def get_state_evidence(state_id: int) -> List[Dict[str, Any]]:
+    """获取状态的所有证据
+    
+    Args:
+        state_id: 状态 ID
+    
+    Returns:
+        证据列表
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, state_id, chunk_id, extraction_id, evidence_role, weight, note, created_at
+        FROM state_evidence
+        WHERE state_id = ?
+        ORDER BY created_at DESC
+    """, (state_id,))
+    
+    return [dict(row) for row in cursor.fetchall()]
+
+
 def upsert_state(
     category: str,
     subtype: str,
     summary: str,
     detail: Optional[str] = None,
-    source_chunk_ids: Optional[List[int]] = None,
+    chunk_ids: Optional[List[int]] = None,  # 重命名参数但保持兼容
     confidence: float = 1.0
 ) -> int:
     """插入或更新状态项
     
     如果已存在相似状态，更新它；否则创建新状态
     （当前版本使用简单匹配，后续可改进为语义匹配）
+    
+    Args:
+        category: 大类
+        subtype: 小类
+        summary: 摘要
+        detail: 详情
+        chunk_ids: chunk ID 列表（将自动添加到 state_evidence）
+        confidence: 置信度
+    
+    Returns:
+        state_id
     """
     conn = get_connection()
     cursor = conn.cursor()
     
     # 简单匹配：相同 category + subtype + 相似 summary
     cursor.execute("""
-        SELECT id, source_chunk_ids FROM states 
+        SELECT id FROM states 
         WHERE category = ? AND subtype = ? AND summary = ? AND status = 'active'
     """, (category, subtype, summary))
     
     existing = cursor.fetchone()
     
-    chunk_ids_json = json.dumps(source_chunk_ids or [])
-    
     if existing:
         # 更新现有状态
         state_id = existing['id']
-        # 合并 source_chunk_ids
-        old_chunks = json.loads(existing['source_chunk_ids'] or '[]')
-        new_chunks = list(set(old_chunks + (source_chunk_ids or [])))
-        
         cursor.execute("""
             UPDATE states 
             SET detail = COALESCE(?, detail),
                 confidence = ?,
-                last_updated = julianday('now'),
-                source_chunk_ids = ?
+                last_updated = julianday('now')
             WHERE id = ?
-        """, (detail, confidence, json.dumps(new_chunks), state_id))
+        """, (detail, confidence, state_id))
+        
+        # 添加新的证据（如果有）
+        if chunk_ids:
+            for chunk_id in chunk_ids:
+                # 检查是否已存在
+                cursor.execute("""
+                    SELECT id FROM state_evidence 
+                    WHERE state_id = ? AND chunk_id = ?
+                """, (state_id, chunk_id))
+                if not cursor.fetchone():
+                    add_state_evidence(state_id, chunk_id=chunk_id)
     else:
         # 创建新状态
         cursor.execute("""
-            INSERT INTO states (category, subtype, summary, detail, confidence, source_chunk_ids)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (category, subtype, summary, detail, confidence, chunk_ids_json))
+            INSERT INTO states (category, subtype, summary, detail, confidence)
+            VALUES (?, ?, ?, ?, ?)
+        """, (category, subtype, summary, detail, confidence))
         state_id = cursor.lastrowid
+        
+        # 添加证据
+        if chunk_ids:
+            for chunk_id in chunk_ids:
+                add_state_evidence(state_id, chunk_id=chunk_id)
     
     conn.commit()
     return state_id
