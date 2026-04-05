@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS extractions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chunk_id INTEGER NOT NULL,
     extraction_json TEXT,
-    model_version TEXT,
+    extractor_type TEXT,           -- 抽取器类型：llm, rule_based, hybrid
+    model_name TEXT,               -- 模型名称：如 gpt-4, claude-3, custom_rules
+    prompt_version TEXT,           -- prompt 版本：如 v1.0, v2.1
     created_at REAL DEFAULT (julianday('now')),
     FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
 );

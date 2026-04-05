@@ -75,8 +75,12 @@ status.md
    - **职责边界**：只负责正文切分，文档级信息（标题、时间等）保存在 documents 表
 
 3. **extractions** - 抽取结果（JSON 格式）
-   - `id`, `chunk_id`, `extraction_json`, `model_version`
+   - `id`, `chunk_id`, `extraction_json`
+   - `extractor_type` - 抽取器类型（llm / rule_based / hybrid）
+   - `model_name` - 模型名称（如 gpt-4, claude-3, custom_rules）
+   - `prompt_version` - prompt 版本（如 v1.0, v2.1）
    - 用途：存储原始抽取结果，便于调试和回溯
+   - **设计说明**：通过细分字段明确抽取来源，便于版本管理和效果对比
 
 4. **states** - 聚合后的状态项
    - `id`, `category`, `subtype`, `summary`, `detail`, `status`, `confidence`
@@ -176,8 +180,11 @@ process_input()
 **关键函数：**
 
 ```python
-save_extraction(chunk_id, result, model_version)
+save_extraction(chunk_id, result, extractor_type, model_name, prompt_version)
     # 保存抽取结果（JSON 格式）
+    # extractor_type: llm / rule_based / hybrid
+    # model_name: 模型名称（可选）
+    # prompt_version: prompt 版本（可选）
 
 get_pending_chunks() 
     → List[dict]

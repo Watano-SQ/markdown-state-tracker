@@ -22,16 +22,34 @@ class ExtractionResult:
     candidates: List[Dict[str, Any]]  # 需要后续确认的候选对象
 
 
-def save_extraction(chunk_id: int, result: ExtractionResult, model_version: str = "v0.1") -> int:
-    """保存抽取结果到数据库"""
+def save_extraction(
+    chunk_id: int,
+    result: ExtractionResult,
+    extractor_type: str = "rule_based",
+    model_name: Optional[str] = None,
+    prompt_version: Optional[str] = None
+) -> int:
+    """保存抽取结果到数据库
+    
+    Args:
+        chunk_id: chunk ID
+        result: 抽取结果对象
+        extractor_type: 抽取器类型（llm, rule_based, hybrid）
+        model_name: 模型名称（如 gpt-4, claude-3, custom_rules）
+        prompt_version: prompt 版本（如 v1.0, v2.1）
+    
+    Returns:
+        extraction_id
+    """
     conn = get_connection()
     cursor = conn.cursor()
     
     # 保存原始抽取结果（JSON 格式，便于调试）
     cursor.execute("""
-        INSERT INTO extractions (chunk_id, extraction_json, model_version)
-        VALUES (?, ?, ?)
-    """, (chunk_id, json.dumps(asdict(result), ensure_ascii=False), model_version))
+        INSERT INTO extractions (chunk_id, extraction_json, extractor_type, model_name, prompt_version)
+        VALUES (?, ?, ?, ?, ?)
+    """, (chunk_id, json.dumps(asdict(result), ensure_ascii=False), 
+          extractor_type, model_name, prompt_version))
     
     extraction_id = cursor.lastrowid
     conn.commit()
