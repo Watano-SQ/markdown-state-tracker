@@ -15,13 +15,16 @@ CREATE TABLE IF NOT EXISTS documents (
     updated_at REAL DEFAULT (julianday('now'))
 );
 
--- 2. 文档切分后的片段
+-- 2. 文档切分后的片段（仅保存正文切分结果）
 CREATE TABLE IF NOT EXISTS chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL,
     chunk_index INTEGER NOT NULL,
     text TEXT NOT NULL,
-    token_estimate INTEGER,
+    start_offset INTEGER,              -- 在原文中的起始位置（可选）
+    end_offset INTEGER,                -- 在原文中的结束位置（可选）
+    token_estimate INTEGER,            -- token 估算（可空）
+    section_label TEXT,                -- 所属章节标签（可选）
     created_at REAL DEFAULT (julianday('now')),
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
     UNIQUE(document_id, chunk_index)

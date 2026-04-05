@@ -28,10 +28,22 @@ class DocumentInfo:
 
 @dataclass  
 class Chunk:
-    """文档片段"""
+    """文档片段（仅包含正文切分结果）
+    
+    Attributes:
+        text: 片段文本内容
+        index: 片段在文档中的序号（从0开始）
+        token_estimate: token 数量估算（可选）
+        start_offset: 在原文中的起始位置（可选）
+        end_offset: 在原文中的结束位置（可选）
+        section_label: 所属章节标签（可选）
+    """
     text: str
     index: int
-    token_estimate: int
+    token_estimate: Optional[int] = None
+    start_offset: Optional[int] = None
+    end_offset: Optional[int] = None
+    section_label: Optional[str] = None
 
 
 def compute_hash(content: str) -> str:
@@ -107,6 +119,7 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
     """将文档切分为 chunks
     
     策略：按段落切分，超长段落再按句子切分
+    保留 offset 信息以便追溯原文位置
     """
     chunks = []
     
@@ -116,11 +129,19 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
     current_chunk = []
     current_tokens = 0
     chunk_index = 0
+    current_offset = 0  # 跟踪当前处理位置
     
     for para in paragraphs:
         para = para.strip()
         if not para:
+            # 计算跳过的空白字符
+            current_offset = content.find(para, current_offset) if para else current_offset + 2
             continue
+        
+        # 找到段落在原文中的位置
+        para_start = content.find(para, current_offset)
+        para_end = para_start + len(para)
+        current_offset = para_end
             
         para_tokens = estimate_tokens(para)
         
@@ -128,10 +149,16 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
         if para_tokens > max_tokens:
             # 先保存当前累积的 chunk
             if current_chunk:
+                chunk_text = '\n\n'.join(current_chunk)
+                chunk_start = content.find(current_chunk[0])
+                chunk_end = chunk_start + len(chunk_text)
+                
                 chunks.append(Chunk(
-                    text='\n\n'.join(current_chunk),
+                    text=chunk_text,
                     index=chunk_index,
-                    token_estimate=current_tokens
+                    token_estimate=current_tokens,
+                    start_offset=chunk_start,
+                    end_offset=chunk_end
                 ))
                 chunk_index += 1
                 current_chunk = []
@@ -141,6 +168,7 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
             sentences = re.split(r'([。！？.!?])', para)
             temp_chunk = []
             temp_tokens = 0
+            temp_start = para_start
             
             i = 0
             while i < len(sentences):
@@ -152,33 +180,46 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
                 
                 sent_tokens = estimate_tokens(sent)
                 if temp_tokens + sent_tokens > max_tokens and temp_chunk:
+                    chunk_text = ''.join(temp_chunk)
                     chunks.append(Chunk(
-                        text=''.join(temp_chunk),
+                        text=chunk_text,
                         index=chunk_index,
-                        token_estimate=temp_tokens
+                        token_estimate=temp_tokens,
+                        start_offset=temp_start,
+                        end_offset=temp_start + len(chunk_text)
                     ))
                     chunk_index += 1
                     temp_chunk = []
                     temp_tokens = 0
+                    temp_start = temp_start + len(chunk_text)
                 
                 temp_chunk.append(sent)
                 temp_tokens += sent_tokens
                 i += 1
             
             if temp_chunk:
+                chunk_text = ''.join(temp_chunk)
                 chunks.append(Chunk(
-                    text=''.join(temp_chunk),
+                    text=chunk_text,
                     index=chunk_index,
-                    token_estimate=temp_tokens
+                    token_estimate=temp_tokens,
+                    start_offset=temp_start,
+                    end_offset=temp_start + len(chunk_text)
                 ))
                 chunk_index += 1
         
         # 正常段落
         elif current_tokens + para_tokens > max_tokens and current_chunk:
+            chunk_text = '\n\n'.join(current_chunk)
+            chunk_start = content.find(current_chunk[0])
+            chunk_end = chunk_start + len(chunk_text)
+            
             chunks.append(Chunk(
-                text='\n\n'.join(current_chunk),
+                text=chunk_text,
                 index=chunk_index,
-                token_estimate=current_tokens
+                token_estimate=current_tokens,
+                start_offset=chunk_start,
+                end_offset=chunk_end
             ))
             chunk_index += 1
             current_chunk = [para]
@@ -189,10 +230,16 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
     
     # 保存最后的 chunk
     if current_chunk:
+        chunk_text = '\n\n'.join(current_chunk)
+        chunk_start = content.find(current_chunk[0])
+        chunk_end = chunk_start + len(chunk_text)
+        
         chunks.append(Chunk(
-            text='\n\n'.join(current_chunk),
+            text=chunk_text,
             index=chunk_index,
-            token_estimate=current_tokens
+            token_estimate=current_tokens,
+            start_offset=chunk_start,
+            end_offset=chunk_end
         ))
     
     return chunks
@@ -230,9 +277,11 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
     # 插入 chunks
     for chunk in chunks:
         cursor.execute("""
-            INSERT INTO chunks (document_id, chunk_index, text, token_estimate)
-            VALUES (?, ?, ?, ?)
-        """, (doc_id, chunk.index, chunk.text, chunk.token_estimate))
+            INSERT INTO chunks (document_id, chunk_index, text, token_estimate, 
+                              start_offset, end_offset, section_label)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (doc_id, chunk.index, chunk.text, chunk.token_estimate,
+              chunk.start_offset, chunk.end_offset, chunk.section_label))
     
     conn.commit()
     return doc_id
