@@ -1,0 +1,14 @@
+# Requirements for Markdown State Tracker
+
+# Core dependencies
+# (no heavy dependencies required for basic functionality)
+
+# Optional: LLM extraction
+openai>=1.0.0
+
+# Optional: Environment variables
+python-dotenv>=1.0.0
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0

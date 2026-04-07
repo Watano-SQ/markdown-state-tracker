@@ -38,6 +38,9 @@ data/
 *.db
 *.db-journal
 
+# Environment variables
+.env
+
 # Output
 output/*.md
 
