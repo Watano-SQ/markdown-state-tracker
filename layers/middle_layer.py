@@ -3,7 +3,7 @@
 """
 import json
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 import sys
@@ -12,14 +12,200 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from db import get_connection
 
 
+# ============================================================================
+# Extraction JSON Schema Definitions
+# ============================================================================
+
+@dataclass
+class TimeInfo:
+    """时间信息（带来源）
+    
+    Attributes:
+        normalized: 标准化时间字符串（ISO 8601 或自定义格式）
+        source: 时间来源（explicit/document_context/inferred/unknown）
+        raw: 原始时间文本（可选）
+    """
+    normalized: Optional[str] = None
+    source: str = "unknown"  # explicit | document_context | inferred | unknown
+    raw: Optional[str] = None
+
+
+@dataclass
+class Entity:
+    """实体（chunk 级局部观察）
+    
+    Attributes:
+        text: 实体文本
+        type: 实体类型（person/organization/location/concept/tool等）
+        context: 上下文信息（可选）
+        confidence: 置信度（0-1）
+    """
+    text: str
+    type: str
+    context: Optional[str] = None
+    confidence: float = 1.0
+
+
+@dataclass
+class Event:
+    """事件（chunk 级局部观察）
+    
+    Attributes:
+        description: 事件描述
+        time: 时间信息（可选）
+        participants: 参与者列表（可选）
+        location: 地点（可选）
+        context: 上下文信息（可选）
+        confidence: 置信度（0-1）
+    """
+    description: str
+    time: Optional[TimeInfo] = None
+    participants: List[str] = field(default_factory=list)
+    location: Optional[str] = None
+    context: Optional[str] = None
+    confidence: float = 1.0
+
+
+@dataclass
+class StateCandidate:
+    """状态候选（chunk 级局部观察，不是最终 state）
+    
+    Attributes:
+        summary: 状态摘要
+        category: 大类建议（dynamic/static）
+        subtype: 小类建议（可选）
+        detail: 详细信息（可选）
+        time: 时间信息（可选）
+        confidence: 置信度（0-1）
+    """
+    summary: str
+    category: Optional[str] = None
+    subtype: Optional[str] = None
+    detail: Optional[str] = None
+    time: Optional[TimeInfo] = None
+    confidence: float = 1.0
+
+
+@dataclass
+class RelationCandidate:
+    """关系候选（chunk 级局部观察）
+    
+    Attributes:
+        source: 源对象文本
+        target: 目标对象文本
+        relation_type: 关系类型（uses/belongs_to/related_to等）
+        context: 上下文信息（可选）
+        confidence: 置信度（0-1）
+    """
+    source: str
+    target: str
+    relation_type: str
+    context: Optional[str] = None
+    confidence: float = 1.0
+
+
+@dataclass
+class RetrievalCandidate:
+    """检索候选对象（语义不确定但重要的实体）
+    
+    Attributes:
+        surface_form: 原始出现形式
+        type_guess: 类型猜测（可选）
+        context: 上下文信息（可选）
+        priority: 优先级（0-10）
+    """
+    surface_form: str
+    type_guess: Optional[str] = None
+    context: Optional[str] = None
+    priority: int = 0
+
+
+@dataclass
+class ExtractionContext:
+    """抽取上下文信息
+    
+    Attributes:
+        chunk_position: chunk 在文档中的位置（start/middle/end）
+        document_title: 文档标题（可选）
+        document_time: 文档默认时间上下文（可选）
+        section: 所属章节（可选）
+    """
+    chunk_position: Optional[str] = None  # start | middle | end
+    document_title: Optional[str] = None
+    document_time: Optional[TimeInfo] = None
+    section: Optional[str] = None
+
+
 @dataclass
 class ExtractionResult:
-    """单个 chunk 的抽取结果"""
-    events: List[Dict[str, Any]]      # 事件列表
-    states: List[Dict[str, Any]]      # 状态列表
-    entities: List[Dict[str, Any]]    # 实体列表
-    relations: List[Dict[str, Any]]   # 关系列表
-    candidates: List[Dict[str, Any]]  # 需要后续确认的候选对象
+    """单个 chunk 的抽取结果（结构化 schema）
+    
+    这是 chunk 级的局部观察层，不是最终的 state。
+    
+    Attributes:
+        context: 抽取上下文信息
+        entities: 实体列表
+        events: 事件列表
+        state_candidates: 状态候选列表
+        relation_candidates: 关系候选列表
+        retrieval_candidates: 检索候选列表
+    """
+    context: ExtractionContext = field(default_factory=ExtractionContext)
+    entities: List[Entity] = field(default_factory=list)
+    events: List[Event] = field(default_factory=list)
+    state_candidates: List[StateCandidate] = field(default_factory=list)
+    relation_candidates: List[RelationCandidate] = field(default_factory=list)
+    retrieval_candidates: List[RetrievalCandidate] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典（自动处理嵌套 dataclass）"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ExtractionResult':
+        """从字典创建（带类型转换）"""
+        # 转换上下文对象（包括嵌套的 TimeInfo）
+        context_data = data.get('context', {})
+        if context_data:
+            doc_time_data = context_data.get('document_time')
+            if doc_time_data and isinstance(doc_time_data, dict):
+                context_data['document_time'] = TimeInfo(**doc_time_data)
+            context = ExtractionContext(**context_data)
+        else:
+            context = ExtractionContext()
+        
+        entities = [Entity(**e) for e in data.get('entities', [])]
+        
+        events = []
+        for e in data.get('events', []):
+            time_data = e.get('time')
+            if time_data and isinstance(time_data, dict):
+                e['time'] = TimeInfo(**time_data)
+            events.append(Event(**e))
+        
+        state_candidates = []
+        for s in data.get('state_candidates', []):
+            time_data = s.get('time')
+            if time_data and isinstance(time_data, dict):
+                s['time'] = TimeInfo(**time_data)
+            state_candidates.append(StateCandidate(**s))
+        
+        relation_candidates = [RelationCandidate(**r) for r in data.get('relation_candidates', [])]
+        retrieval_candidates = [RetrievalCandidate(**r) for r in data.get('retrieval_candidates', [])]
+        
+        return cls(
+            context=context,
+            entities=entities,
+            events=events,
+            state_candidates=state_candidates,
+            relation_candidates=relation_candidates,
+            retrieval_candidates=retrieval_candidates
+        )
+
+
+# ============================================================================
+# Database Functions
+# ============================================================================
 
 
 def save_extraction(
@@ -48,7 +234,7 @@ def save_extraction(
     cursor.execute("""
         INSERT INTO extractions (chunk_id, extraction_json, extractor_type, model_name, prompt_version)
         VALUES (?, ?, ?, ?, ?)
-    """, (chunk_id, json.dumps(asdict(result), ensure_ascii=False), 
+    """, (chunk_id, json.dumps(result.to_dict(), ensure_ascii=False), 
           extractor_type, model_name, prompt_version))
     
     extraction_id = cursor.lastrowid

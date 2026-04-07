@@ -206,16 +206,28 @@ archive_state(state_id)
     # 归档状态项
 ```
 
-**ExtractionResult 数据结构：**
+**ExtractionResult 数据结构（结构化 schema）：**
+
+详细 schema 定义见 [.github/EXTRACTION_JSON_SCHEMA.md](.github/EXTRACTION_JSON_SCHEMA.md)
+
 ```python
 @dataclass
 class ExtractionResult:
-    events: List[Dict]         # 事件列表
-    states: List[Dict]         # 状态列表
-    entities: List[Dict]       # 实体列表
-    relations: List[Dict]      # 关系列表
-    candidates: List[Dict]     # 候选对象
+    context: ExtractionContext              # 抽取上下文
+    entities: List[Entity]                  # 实体列表
+    events: List[Event]                     # 事件列表
+    state_candidates: List[StateCandidate]  # 状态候选
+    relation_candidates: List[RelationCandidate]  # 关系候选
+    retrieval_candidates: List[RetrievalCandidate]  # 检索候选
 ```
+
+**关键设计说明：**
+- extraction_json 是 chunk 级局部观察，不是最终 state
+- 时间字段包含来源信息：`TimeInfo(normalized, source, raw)`
+- 时间来源类型：explicit（显式）、document_context（文档上下文）、inferred（推断）、unknown
+- state_candidates 是候选，需要后续聚合成正式 state
+- relation_candidates 是局部观察，需要验证后才成为正式关系
+- retrieval_candidates 存储语义不确定但重要的对象
 
 **修改建议：**
 - 实现抽取器：填充 `ExtractionResult` 的逻辑
