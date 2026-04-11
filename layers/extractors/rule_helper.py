@@ -5,6 +5,14 @@ import re
 from typing import Dict, Any, List, Optional
 
 
+FONT_TAG_PATTERN = re.compile(r'</?\s*font\b[^>]*>', re.IGNORECASE)
+
+
+def strip_font_tags(text: str) -> str:
+    """移除所有 font 标签，保留标签内文本内容。"""
+    return FONT_TAG_PATTERN.sub('', text)
+
+
 def preprocess_text(text: str, context: Dict[str, Any]) -> Dict[str, Any]:
     """
     规则预处理：提取显式信息作为 LLM 的辅助提示
@@ -16,6 +24,9 @@ def preprocess_text(text: str, context: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         预处理结果，包含原文本和提取的提示信息
     """
+    # 先清理 font 标签，避免无关 HTML 噪声影响抽取。
+    text = strip_font_tags(text)
+
     hints = {}
     
     # 1. 提取显式日期
