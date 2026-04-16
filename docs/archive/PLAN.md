@@ -2,7 +2,7 @@
 
 **项目名称**: Markdown State Tracker  
 **当前版本**: v0.1 (原型阶段)  
-**最后更新**: 2026-04-07
+**最后更新**: 2026-04-15
 
 ---
 
@@ -19,13 +19,24 @@
 - [x] 输出快照版本控制
 - [x] state_evidence 多对多关联表
 - [x] extractions 元数据字段（extractor_type, model_name, prompt_version）
+- [x] 文件日志系统（控制台摘要 + 轮转文件日志）
 
-### ❌ 关键缺失功能
+### 🔎 本地验证结果（2026-04-15）
+
+- [x] `python main.py --stats` 可正常执行
+- [x] 当前数据库中已有 `documents=4`、`chunks=122`、`extractions=104`
+- [ ] 当前数据库中 `states=0`、`state_evidence=0`、`relations=0`、`retrieval_candidates=0`
+- [ ] `output/status.md` 只能生成固定骨架，尚无实际状态项
+
+### ❌ 当前阻塞正常产出的缺口
 
 - [x] **抽取器实现** ✅ 2026-04-07（LLM 抽取器已实现）
-- [ ] **聚合逻辑**（state_candidates → states 的转换）
-- [ ] **语义去重**（状态合并只用精确匹配）
-- [ ] **单元测试**（除 extraction schema 外无测试）
+- [ ] **聚合逻辑未接通**（`state_candidates` 尚未写入 `states/state_evidence`）
+- [ ] **失败 chunk 状态流转错误**（部分 chunk 抽取失败后，文档仍可能被标记为 `processed`，后续不会自动重试）
+- [ ] **关系/检索候选未落库**（`relation_candidates` / `retrieval_candidates` 仍停留在 `extraction_json`）
+- [ ] **LLM 输出健壮性不足**（存在 fenced JSON、超时、`JSONDecodeError` 等问题）
+- [ ] **语义去重仍较弱**（状态合并目前仍是精确匹配）
+- [ ] **测试覆盖不足**（已有 schema、logging、font 相关测试，输入/聚合/输出/失败重试仍缺）
 
 ---
 
@@ -63,48 +74,59 @@
 #### 任务 2: 实现聚合逻辑（Aggregation）
 **状态**: ⏳ 待开始  
 **优先级**: P0  
-**预估工作量**: 小（1-2 小时）
+**预估工作量**: 中等（3-5 小时）
 
 **目标**:
-- 将 extractions.extraction_json 中的 state_candidates 转换为 states 表记录
-- 实现基本的合并策略
+- 打通 `extractions -> states -> output` 主链路
+- 将 `extractions.extraction_json` 中的 `state_candidates` 转换为 `states` / `state_evidence` 表记录
+- 保证聚合步骤可重复执行且不会无限重复写入
 
 **验收标准**:
 - [ ] 创建 `layers/aggregator.py`
-- [ ] 实现 `aggregate_state_candidates()` 函数
-- [ ] 从所有 extractions 读取 state_candidates
-- [ ] 调用 `upsert_state()` 写入 states 表
-- [ ] 自动添加 state_evidence 关联
-- [ ] 在主流程中调用聚合逻辑
+- [ ] 实现 `aggregate_extractions()` 或等价主函数
+- [ ] 从 `extractions` 读取并解析 `ExtractionResult`
+- [ ] 将每个 `state_candidate` 规范化为 `category/subtype/summary/detail/confidence`
+- [ ] 调用 `upsert_state()` 写入 `states`
+- [ ] 同时写入 `state_evidence`，至少关联 `chunk_id` 和 `extraction_id`
+- [ ] 重复运行聚合时，不产生重复 `state_evidence` 和状态爆炸
+- [ ] 在 `main.py` 中于输出前调用聚合逻辑
+- [ ] 在现有样本数据上跑通后，`active_states > 0`
+- [ ] `output/status.md` 不再只有空骨架
 
 **技术方案**:
 ```python
-def aggregate_state_candidates():
-    # 1. 读取所有 extractions
+def aggregate_extractions():
+    # 1. 读取 extractions + chunks + documents
     # 2. 解析 extraction_json -> ExtractionResult
-    # 3. 遍历 state_candidates
-    # 4. 调用 upsert_state() 合并
-    # 5. 添加 evidence 关联
+    # 3. 遍历 state_candidates 并做最小规范化
+    # 4. 调用 upsert_state() 合并到 states
+    # 5. 为每个 state 写入 state_evidence(chunk_id, extraction_id)
+    # 6. 返回聚合统计，供 main.py 打印和记录日志
 ```
 
 ---
 
 #### 任务 3: 补充单元测试
-**状态**: ⏳ 待开始  
+**状态**: 🟡 部分完成  
 **优先级**: P1  
 **预估工作量**: 中等（3-4 小时）
 
 **目标**:
-- 为核心模块添加测试覆盖
-- 使用 pytest 框架
+- 为核心模块添加可批量执行的测试覆盖
+- 优先统一到 `pytest` 入口，但允许兼容现有 `unittest`
+- 当前已存在 `test_extraction_schema.py`、`test_logging.py`、`test_font_filtering.py`
 
 **验收标准**:
+- [x] `test_extraction_schema.py` - 覆盖 ExtractionResult schema 往返
+- [x] `test_logging.py` - 覆盖日志初始化、截断、重试、跳过抽取、成功抽取
+- [x] `test_font_filtering.py` - 覆盖 font tag 清理与预处理
 - [ ] 创建 `tests/` 目录
 - [ ] `tests/test_input_layer.py` - 测试文档扫描、切分、变更检测
 - [ ] `tests/test_middle_layer.py` - 测试状态管理、抽取保存
 - [ ] `tests/test_output_layer.py` - 测试状态选择、文档生成
 - [ ] `tests/test_extractor.py` - 测试抽取器（任务1完成后）
 - [ ] `tests/test_aggregator.py` - 测试聚合逻辑（任务2完成后）
+- [ ] `tests/test_pipeline_recovery.py` - 测试失败 chunk 的状态流转与重试
 - [ ] 测试覆盖率 > 60%
 
 **重点测试用例**:
@@ -127,7 +149,68 @@ def aggregate_state_candidates():
 
 ---
 
+#### 任务 11: 修复失败 chunk 的状态流转与重试
+**状态**: ⏳ 待开始  
+**优先级**: P0  
+**预估工作量**: 中等（2-4 小时）
+
+**目标**:
+- 修复“部分 chunk 抽取失败但文档被提前标记为 `processed`”的问题
+- 保证失败 chunk 在后续运行中仍可进入待处理队列
+
+**验收标准**:
+- [ ] 明确 `documents.status` 的状态机（至少区分 `pending` / `processed` / `error` 或等价语义）
+- [ ] 仅当文档下全部 chunks 完成抽取后，才标记文档为 `processed`
+- [ ] 若某文档存在失败 chunk，下一次运行时 `get_pending_chunks()` 仍能重新取到
+- [ ] 日志中明确记录失败 chunk 数、未完成文档数和重试结果
+- [ ] 增加对应自动化测试
+
+**技术方案**:
+```python
+def finalize_document_status(document_id):
+    # 1. 统计该文档 chunks 总数 / 已抽取数
+    # 2. 若全部完成 -> processed
+    # 3. 若存在未完成或失败 -> 保持 pending / 标为 error
+```
+
+---
+
+#### 任务 12: 落库关系候选与检索候选
+**状态**: ⏳ 待开始  
+**优先级**: P1  
+**预估工作量**: 中等（2-4 小时）
+
+**目标**:
+- 将 `relation_candidates` / `retrieval_candidates` 从 `extraction_json` 接入中间层表结构
+- 让数据库中的 `relations` / `retrieval_candidates` 不再长期为空
+
+**验收标准**:
+- [ ] 聚合或后处理阶段写入 `relations`
+- [ ] 调用 `add_retrieval_candidate()` 写入 `retrieval_candidates`
+- [ ] 关联 `chunk_id` 或 `extraction_id` 作为证据来源
+- [ ] 重复运行时具备基本去重能力
+- [ ] 在样本数据上可看到非零记录
+
+---
+
 ### 🟡 中优先级（质量提升）
+
+#### 任务 13: 增强 LLM 响应健壮性
+**状态**: ⏳ 待开始  
+**优先级**: P1  
+**预估工作量**: 小（1-2 小时）
+
+**目标**:
+- 降低 fenced JSON、超时和脏响应对抽取流程的破坏
+- 提升大批量处理时的稳定性
+
+**验收标准**:
+- [ ] 在 `json.loads()` 前清理 ```json fenced block 等常见包装
+- [ ] 对空响应、无 `choices`、非 JSON 内容给出明确错误分类
+- [ ] 将超时、JSON 解析失败、API 失败分别记录到日志
+- [ ] 为典型异常场景补测试
+
+---
 
 #### 任务 4: 改进 Token 估算
 **状态**: ⏳ 待开始  
@@ -224,35 +307,27 @@ ALTER TABLE retrieval_candidates DROP COLUMN source_chunk_ids;
 ---
 
 #### 任务 7: 添加日志系统
-**状态**: ⏳ 待开始  
+**状态**: ✅ 已完成  
 **优先级**: P2  
-**预估工作量**: 小（1 小时）
+**完成日期**: 2026-04-11
 
 **目标**:
-- 替换 print 为标准 logging
+- 为主流程提供可追踪的运行可观测性
+- 保留控制台摘要输出，并同时写入轮转文件日志
 
 **验收标准**:
-- [ ] 创建 `utils/logger.py`
-- [ ] 配置日志格式、级别、输出
-- [ ] 替换所有 print 为 logger 调用
-- [ ] 支持 `--debug` / `--verbose` 参数
+- [x] 创建 `app_logging.py`
+- [x] 配置日志格式、级别、轮转文件输出
+- [x] 在主流程、输入层、抽取层、数据库层、输出层接入 logger
+- [x] 保留控制台摘要输出，并支持 `--quiet`
+- [x] 支持 `--log-level` / `--log-file`
 
 **实现示例**:
 ```python
-# utils/logger.py
-import logging
-
-def setup_logger(level=logging.INFO):
-    logger = logging.getLogger('markdown_tracker')
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        '[%(asctime)s] %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(level)
-    return logger
+# app_logging.py
+run_id = setup_logging(log_file="data/logs/pipeline.log", level="INFO")
+logger = get_logger("pipeline")
+log_event(logger, logging.INFO, "run_start", "Pipeline run started", stage="pipeline")
 ```
 
 ---
@@ -310,14 +385,14 @@ def setup_logger(level=logging.INFO):
 ## 📝 实施策略
 
 ### 阶段 1: 核心功能（优先）
-**目标**: 让系统能完整运行  
-**任务**: 1, 2, 3  
-**预估时间**: 3-5 天
+**目标**: 让系统能产出非空、可重复执行的状态结果  
+**任务**: 1, 2, 11, 12  
+**预估时间**: 4-6 天
 
 ### 阶段 2: 质量提升
 **目标**: 提升代码质量和健壮性  
-**任务**: 4, 5, 6, 7  
-**预估时间**: 3-5 天
+**任务**: 3, 13, 4, 5, 6, 7  
+**预估时间**: 4-6 天
 
 ### 阶段 3: 完善优化
 **目标**: 用户体验优化  
@@ -336,6 +411,21 @@ def setup_logger(level=logging.INFO):
 ---
 
 ## 🔄 更新日志
+
+### 2026-04-15 (更新 4)
+- 📝 根据代码与日志核对，重新校准项目计划
+- 确认当前 `states` / `state_evidence` / `relations` / `retrieval_candidates` 仍未接通
+- 上调任务 2 范围：聚合逻辑必须直接打通到输出层
+- 新增任务 11：修复失败 chunk 状态流转与重试
+- 新增任务 12：落库关系候选与检索候选
+- 新增任务 13：增强 LLM 响应健壮性
+
+### 2026-04-15 (更新 3)
+- ✅ 完成任务 7: 文件日志系统
+- 新增 `app_logging.py`
+- 主流程保留控制台摘要输出，同时写入轮转文件日志
+- 支持 `--quiet`、`--log-level`、`--log-file`
+- 🟡 任务 3 部分推进：新增 `test_logging.py`
 
 ### 2026-04-07 (更新 2)
 - ✅ 完成任务 1: LLM 抽取器实现

@@ -8,13 +8,18 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+import logging
+from time import perf_counter
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app_logging import get_logger, log_event
 from config import INPUT_DIR
 from db import get_connection
 
+
+logger = get_logger("input")
 
 @dataclass
 class DocumentInfo:
@@ -72,6 +77,7 @@ def extract_title(content: str, filepath: Path) -> str:
 
 def scan_documents(input_dir: Path = INPUT_DIR) -> List[DocumentInfo]:
     """扫描目录中的所有 md 文件"""
+    start_time = perf_counter()
     documents = []
     
     for md_file in input_dir.rglob('*.md'):
@@ -84,7 +90,26 @@ def scan_documents(input_dir: Path = INPUT_DIR) -> List[DocumentInfo]:
             content_hash=compute_hash(content)
         )
         documents.append(doc)
+        log_event(
+            logger,
+            logging.INFO,
+            "document_scanned",
+            "Scanned markdown document",
+            stage="input",
+            path=doc.path,
+            title=doc.title,
+            content_hash=doc.content_hash,
+        )
     
+    log_event(
+        logger,
+        logging.INFO,
+        "document_scan_done",
+        "Completed markdown document scan",
+        stage="input",
+        total_documents=len(documents),
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
     return documents
 
 
@@ -112,6 +137,16 @@ def get_changed_documents(documents: List[DocumentInfo]) -> Tuple[List[DocumentI
         elif row['content_hash'] != doc.content_hash:
             modified_docs.append(doc)
     
+    log_event(
+        logger,
+        logging.INFO,
+        "document_changes_detected",
+        "Calculated document changes",
+        stage="input",
+        total_documents=len(documents),
+        new_documents=len(new_docs),
+        modified_documents=len(modified_docs),
+    )
     return new_docs, modified_docs
 
 
@@ -247,8 +282,11 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
 
 def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
     """保存文档和 chunks 到数据库，返回 document_id"""
+    start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
+    old_chunk_count = 0
+    action = "insert"
     
     # 检查是否已存在
     cursor.execute("SELECT id FROM documents WHERE path = ?", (doc.path,))
@@ -256,6 +294,9 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
     
     if existing:
         doc_id = existing['id']
+        action = "update"
+        cursor.execute("SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc_id,))
+        old_chunk_count = cursor.fetchone()[0]
         # 更新文档
         cursor.execute("""
             UPDATE documents 
@@ -284,6 +325,20 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
               chunk.start_offset, chunk.end_offset, chunk.section_label))
     
     conn.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "document_saved",
+        "Saved document and chunks",
+        stage="input",
+        document_id=doc_id,
+        path=doc.path,
+        title=doc.title,
+        chunk_count=len(chunks),
+        replaced_chunk_count=old_chunk_count,
+        action=action,
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
     return doc_id
 
 
@@ -293,10 +348,20 @@ def process_input(input_dir: Path = INPUT_DIR) -> Dict[str, Any]:
     Returns:
         处理统计信息
     """
+    stage_start = perf_counter()
     # 1. 扫描文档
     documents = scan_documents(input_dir)
     
     if not documents:
+        log_event(
+            logger,
+            logging.INFO,
+            "input_no_documents",
+            "No markdown documents found",
+            stage="input",
+            total_documents=0,
+            duration_ms=(perf_counter() - stage_start) * 1000,
+        )
         return {'total': 0, 'new': 0, 'modified': 0, 'processed': []}
     
     # 2. 识别变更
@@ -306,6 +371,7 @@ def process_input(input_dir: Path = INPUT_DIR) -> Dict[str, Any]:
     # 3. 处理每个文档
     processed = []
     for doc in docs_to_process:
+        chunk_start = perf_counter()
         chunks = chunk_document(doc.content)
         doc_id = save_document_and_chunks(doc, chunks)
         processed.append({
@@ -315,10 +381,37 @@ def process_input(input_dir: Path = INPUT_DIR) -> Dict[str, Any]:
             'chunk_count': len(chunks),
             'is_new': doc in new_docs
         })
+        log_event(
+            logger,
+            logging.INFO,
+            "document_chunked",
+            "Chunked changed document",
+            stage="input",
+            document_id=doc_id,
+            path=doc.path,
+            title=doc.title,
+            chunk_count=len(chunks),
+            action="new" if doc in new_docs else "modified",
+            duration_ms=(perf_counter() - chunk_start) * 1000,
+        )
     
-    return {
+    result = {
         'total': len(documents),
         'new': len(new_docs),
         'modified': len(modified_docs),
         'processed': processed
     }
+
+    log_event(
+        logger,
+        logging.INFO,
+        "input_processing_done",
+        "Completed input processing",
+        stage="input",
+        total_documents=result['total'],
+        new_documents=result['new'],
+        modified_documents=result['modified'],
+        processed_documents=len(result['processed']),
+        duration_ms=(perf_counter() - stage_start) * 1000,
+    )
+    return result

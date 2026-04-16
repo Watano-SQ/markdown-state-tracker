@@ -48,3 +48,5 @@ output/*.md
 !output/.gitkeep
 !input_docs/.gitkeep
 !data/.gitkeep
+
+input_docs/运维组_test
