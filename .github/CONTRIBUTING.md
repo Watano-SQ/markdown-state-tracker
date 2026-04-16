@@ -4,7 +4,7 @@
 
 - [README.md](/D:/Apps/Python/lab/personal_prompt/README.md)
 - [docs/architecture.md](/D:/Apps/Python/lab/personal_prompt/docs/architecture.md)
-- [TESTING.md](/D:/Apps/Python/lab/personal_prompt/TESTING.md)
+- [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)
 
 ## 项目边界
 
@@ -27,16 +27,8 @@
 
 ## 最低验证要求
 
-按改动范围运行最小相关集合：
-
-```bash
-python main.py --help
-python test_extraction_schema.py
-python -m unittest test_logging.py
-python test_font_filtering.py
-python main.py --skip-extraction
-python main.py --stats
-```
+按改动范围运行 [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md) 中定义的最小相关集合。  
+不要在本文件中重复维护测试命令清单。
 
 谨慎使用：
 
@@ -44,7 +36,7 @@ python main.py --stats
 python main.py --init
 ```
 
-更详细的验证路径见 [TESTING.md](/D:/Apps/Python/lab/personal_prompt/TESTING.md)。
+更详细的验证路径见 [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)。
 
 ## PR 应包含的信息
 

@@ -17,17 +17,7 @@ Important current-state note: the repository now has a basic aggregation path fr
 
 ## Required Checks
 
-Run the smallest relevant subset for the task. These are the repository's real checks and runnable commands today:
-
-```bash
-python main.py --help
-python test_extraction_schema.py
-python -m unittest test_aggregator.py
-python -m unittest test_logging.py
-python test_font_filtering.py
-python main.py --skip-extraction
-python main.py --stats
-```
+Validation commands are maintained in [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md). Run the smallest relevant subset from that document for the task you are doing.
 
 Use with care:
 
@@ -53,11 +43,11 @@ There is no repository-configured lint, typecheck, or CI command to claim by def
 
 - [README.md](/D:/Apps/Python/lab/personal_prompt/README.md)
 - [docs/architecture.md](/D:/Apps/Python/lab/personal_prompt/docs/architecture.md)
+- [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)
 - [docs/specs/_template.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/_template.md)
 - [docs/plans/_template.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/_template.md)
 - [docs/changes.md](/D:/Apps/Python/lab/personal_prompt/docs/changes.md)
-- [CONTRIBUTING.md](/D:/Apps/Python/lab/personal_prompt/CONTRIBUTING.md)
-- [TESTING.md](/D:/Apps/Python/lab/personal_prompt/TESTING.md)
+- [.github/CONTRIBUTING.md](/D:/Apps/Python/lab/personal_prompt/.github/CONTRIBUTING.md)
 - [.github/EXTRACTION_JSON_SCHEMA.md](/D:/Apps/Python/lab/personal_prompt/.github/EXTRACTION_JSON_SCHEMA.md)
 - [main.py](/D:/Apps/Python/lab/personal_prompt/main.py)
 - [db/schema.py](/D:/Apps/Python/lab/personal_prompt/db/schema.py)

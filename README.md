@@ -94,8 +94,8 @@ python main.py --init
 ## 继续阅读
 
 - [docs/architecture.md](/D:/Apps/Python/lab/personal_prompt/docs/architecture.md)：当前架构事实、依赖方向、高风险区域
-- [TESTING.md](/D:/Apps/Python/lab/personal_prompt/TESTING.md)：验证方式与预期结果
-- [CONTRIBUTING.md](/D:/Apps/Python/lab/personal_prompt/CONTRIBUTING.md)：协作与提交流程
+- [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)：验证方式与测试命令正典
+- [.github/CONTRIBUTING.md](/D:/Apps/Python/lab/personal_prompt/.github/CONTRIBUTING.md)：协作与提交流程
 - [.github/EXTRACTION_JSON_SCHEMA.md](/D:/Apps/Python/lab/personal_prompt/.github/EXTRACTION_JSON_SCHEMA.md)：抽取 schema 参考
 
 ## 项目边界

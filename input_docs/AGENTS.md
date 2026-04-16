@@ -23,4 +23,4 @@ This directory contains raw input Markdown files and sample documents used by th
 
 ## Sync
 
-- If sample documents are added, removed, or meaningfully repurposed for validation, update `README.md` or `TESTING.md` only if the documented workflow actually changed.
+- If sample documents are added, removed, or meaningfully repurposed for validation, update `README.md` or `docs/testing.md` only if the documented workflow actually changed.

@@ -18,7 +18,7 @@
 
 ### 决策
 
-活跃文档体系收敛为：`AGENTS.md`、`README.md`、`docs/architecture.md`、`docs/specs/_template.md`、`docs/plans/_template.md`、`docs/changes.md`、`CONTRIBUTING.md`、`TESTING.md`、`.github/EXTRACTION_JSON_SCHEMA.md`。
+活跃文档体系收敛为：`AGENTS.md`、`README.md`、`docs/architecture.md`、`docs/testing.md`、`docs/specs/_template.md`、`docs/plans/_template.md`、`docs/changes.md`、`.github/CONTRIBUTING.md`、`.github/EXTRACTION_JSON_SCHEMA.md`。
 
 - Why:
   - 仓库原先存在多个入口、多个快速开始、多个架构说明、多个历史说明，职责重叠严重
@@ -152,3 +152,19 @@
   - 规则文件数量增加，但只放在高风险目录，且每份都保持短小
 - Follow-up:
   - 仅在这些目录的长期约束变化时更新对应局部 `AGENTS.md`
+
+### 决策
+
+根目录长期文档入口保持为 `README.md` 和 `AGENTS.md`；贡献说明移到 `.github/CONTRIBUTING.md`，测试命令正典移到 `docs/testing.md`。
+
+- Why:
+  - 根目录只保留仓库入口和 agent 规则更清晰
+  - `.github/CONTRIBUTING.md` 仍可被 GitHub 识别为贡献指南
+  - 测试命令集中在一处，避免 `AGENTS.md`、贡献文档、架构文档各自维护一份命令清单
+- Alternatives rejected:
+  - 继续在多个活跃文档中重复维护测试命令
+  - 继续把 `CONTRIBUTING.md` 和 `TESTING.md` 放在根目录
+- Risk / debt accepted:
+  - 某些历史归档文档仍会保留旧路径引用，只作为历史上下文
+- Follow-up:
+  - 后续若测试命令变化，优先更新 `docs/testing.md`，其余活跃文档只做链接或简短说明

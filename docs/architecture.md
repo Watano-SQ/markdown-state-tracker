@@ -73,11 +73,8 @@
   - [quick_start.ps1](/D:/Apps/Python/lab/personal_prompt/quick_start.ps1)
   - [quick_start.bat](/D:/Apps/Python/lab/personal_prompt/quick_start.bat)
   - [test.sh](/D:/Apps/Python/lab/personal_prompt/test.sh)
-- 当前常用测试入口：
-  - `python test_extraction_schema.py`
-  - `python -m unittest test_aggregator.py`
-  - `python -m unittest test_logging.py`
-  - `python test_font_filtering.py`
+- 测试命令事实源：
+  - [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)
 
 ## 依赖方向
 
@@ -119,6 +116,7 @@
 ## 参考文件
 
 - [README.md](/D:/Apps/Python/lab/personal_prompt/README.md)
+- [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)
 - [.github/EXTRACTION_JSON_SCHEMA.md](/D:/Apps/Python/lab/personal_prompt/.github/EXTRACTION_JSON_SCHEMA.md)
 - [db/schema.py](/D:/Apps/Python/lab/personal_prompt/db/schema.py)
 - [db/connection.py](/D:/Apps/Python/lab/personal_prompt/db/connection.py)
