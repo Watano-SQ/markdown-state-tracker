@@ -4,16 +4,20 @@
 import json
 import time
 from typing import Optional, Dict, Any
+import logging
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from app_logging import get_logger, log_event, summarize_text
 from layers.middle_layer import ExtractionResult
-from .config import ExtractorConfig, default_config
+from .config import ExtractorConfig
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 from .rule_helper import preprocess_text, postprocess_result
 
+
+logger = get_logger("extractor")
 
 class LLMExtractor:
     """基于 LLM 的抽取器"""
@@ -47,7 +51,16 @@ class LLMExtractor:
         # 延迟导入 OpenAI（避免未安装时报错）
         try:
             from openai import OpenAI
-            self.client = OpenAI(api_key=self.config.api_key)
+            
+            # 根据是否有 base_url 初始化客户端
+            if self.config.base_url:
+                self.client = OpenAI(
+                    api_key=self.config.api_key,
+                    base_url=self.config.base_url
+                )
+            else:
+                self.client = OpenAI(api_key=self.config.api_key)
+                
         except ImportError:
             raise ImportError(
                 "openai package not installed. "
@@ -56,11 +69,27 @@ class LLMExtractor:
         
         self.model = self.config.model
         self.temperature = self.config.temperature
+        self.extra_body = self.config.extra_body
+        self.provider = self.config.get_provider()
+        
+        log_event(
+            logger,
+            logging.INFO,
+            "extractor_initialized",
+            "Initialized LLM extractor",
+            stage="extraction",
+            provider=self.provider,
+            model=self.model,
+            temperature=self.temperature,
+            timeout=self.config.timeout,
+            max_retries=self.config.max_retries,
+        )
     
     def extract(
         self,
         text: str,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
+        log_context: Optional[Dict[str, Any]] = None,
     ) -> ExtractionResult:
         """
         从文本中提取结构化信息
@@ -73,6 +102,8 @@ class LLMExtractor:
             ExtractionResult 对象
         """
         context = context or {}
+        log_context = log_context or {}
+        extract_start = time.perf_counter()
         
         # 1. 规则预处理
         preprocessed = preprocess_text(text, context)
@@ -85,15 +116,33 @@ class LLMExtractor:
         )
         
         # 3. 调用 LLM（带重试）
-        result_json = self._call_llm_with_retry(user_prompt)
+        result_json = self._call_llm_with_retry(user_prompt, log_context=log_context)
         
         # 4. 后处理
         result_json = postprocess_result(result_json, preprocessed)
         
         # 5. 转换为 ExtractionResult
-        return ExtractionResult.from_dict(result_json)
+        result = ExtractionResult.from_dict(result_json)
+        log_event(
+            logger,
+            logging.INFO,
+            "extract_result_ready",
+            "Prepared structured extraction result",
+            stage="extraction",
+            duration_ms=(time.perf_counter() - extract_start) * 1000,
+            entity_count=len(result.entities),
+            state_candidate_count=len(result.state_candidates),
+            relation_candidate_count=len(result.relation_candidates),
+            retrieval_candidate_count=len(result.retrieval_candidates),
+            **log_context,
+        )
+        return result
     
-    def _call_llm_with_retry(self, user_prompt: str) -> Dict[str, Any]:
+    def _call_llm_with_retry(
+        self,
+        user_prompt: str,
+        log_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         调用 LLM，带重试机制
         
@@ -103,39 +152,124 @@ class LLMExtractor:
         Returns:
             解析后的 JSON 结果
         """
+        log_context = log_context or {}
         last_error = None
+        last_response_preview = None
         
         for attempt in range(self.config.max_retries):
+            attempt_number = attempt + 1
+            attempt_start = time.perf_counter()
+            log_event(
+                logger,
+                logging.INFO,
+                "llm_request_start",
+                "Starting LLM request",
+                stage="extraction",
+                attempt=attempt_number,
+                max_retries=self.config.max_retries,
+                model=self.model,
+                provider=self.provider,
+                temperature=self.temperature,
+                timeout=self.config.timeout,
+                prompt_chars=len(user_prompt),
+                **log_context,
+            )
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
+                # 构建请求参数
+                request_params = {
+                    "model": self.model,
+                    "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=self.temperature,
-                    response_format={"type": "json_object"},
-                    timeout=self.config.timeout
-                )
+                    "temperature": self.temperature,
+                    "response_format": {"type": "json_object"},
+                    "timeout": self.config.timeout
+                }
+                
+                # 添加额外参数（如 MiniMax 的 reasoning_split）
+                if self.extra_body:
+                    request_params["extra_body"] = self.extra_body
+                
+                response = self.client.chat.completions.create(**request_params)
                 
                 # 解析 JSON
-                content = response.choices[0].message.content
+                content = response.choices[0].message.content or ""
                 result = json.loads(content)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "llm_request_done",
+                    "LLM request completed successfully",
+                    stage="extraction",
+                    attempt=attempt_number,
+                    model=self.model,
+                    provider=self.provider,
+                    response_chars=len(content),
+                    duration_ms=(time.perf_counter() - attempt_start) * 1000,
+                    **log_context,
+                )
                 return result
                 
             except json.JSONDecodeError as e:
                 last_error = e
-                print(f"JSON 解析失败 (尝试 {attempt + 1}/{self.config.max_retries}): {e}")
+                last_response_preview = summarize_text(locals().get("content", ""), 200)
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "llm_request_retry",
+                    "Retrying after JSON parse failure",
+                    stage="extraction",
+                    attempt=attempt_number,
+                    max_retries=self.config.max_retries,
+                    model=self.model,
+                    provider=self.provider,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    response_preview=last_response_preview,
+                    duration_ms=(time.perf_counter() - attempt_start) * 1000,
+                    sleep_seconds=attempt_number,
+                    **log_context,
+                )
                 
             except Exception as e:
                 last_error = e
-                print(f"LLM 调用失败 (尝试 {attempt + 1}/{self.config.max_retries}): {e}")
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "llm_request_retry",
+                    "Retrying after LLM request failure",
+                    stage="extraction",
+                    attempt=attempt_number,
+                    max_retries=self.config.max_retries,
+                    model=self.model,
+                    provider=self.provider,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    duration_ms=(time.perf_counter() - attempt_start) * 1000,
+                    sleep_seconds=attempt_number,
+                    **log_context,
+                )
             
             # 重试前等待
             if attempt < self.config.max_retries - 1:
                 time.sleep(1 * (attempt + 1))  # 递增等待时间
         
         # 所有重试都失败
+        log_event(
+            logger,
+            logging.ERROR,
+            "llm_request_failed",
+            "LLM request failed after all retries",
+            stage="extraction",
+            max_retries=self.config.max_retries,
+            model=self.model,
+            provider=self.provider,
+            error_type=type(last_error).__name__ if last_error else "UnknownError",
+            error_message=str(last_error) if last_error else None,
+            response_preview=last_response_preview,
+            **log_context,
+        )
         raise RuntimeError(f"LLM extraction failed after {self.config.max_retries} attempts: {last_error}")
     
     def extract_batch(

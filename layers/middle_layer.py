@@ -2,15 +2,20 @@
 中间层：状态存储与管理
 """
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
+import logging
+from time import perf_counter
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app_logging import get_logger, log_event
 from db import get_connection
 
+
+logger = get_logger("db")
 
 # ============================================================================
 # Extraction JSON Schema Definitions
@@ -227,6 +232,7 @@ def save_extraction(
     Returns:
         extraction_id
     """
+    start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -239,12 +245,65 @@ def save_extraction(
     
     extraction_id = cursor.lastrowid
     conn.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "save_extraction_done",
+        "Saved extraction result",
+        stage="db",
+        chunk_id=chunk_id,
+        extraction_id=extraction_id,
+        model=model_name,
+        action=extractor_type,
+        entity_count=len(result.entities),
+        state_candidate_count=len(result.state_candidates),
+        relation_candidate_count=len(result.relation_candidates),
+        retrieval_candidate_count=len(result.retrieval_candidates),
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
     
     return extraction_id
 
 
+def get_extractions_for_aggregation() -> List[Dict[str, Any]]:
+    """获取聚合所需的 extraction 源数据。"""
+    start_time = perf_counter()
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT e.id AS extraction_id,
+               e.chunk_id,
+               e.extraction_json,
+               e.extractor_type,
+               e.model_name,
+               e.prompt_version,
+               c.document_id,
+               c.chunk_index,
+               d.path,
+               d.title
+        FROM extractions e
+        JOIN chunks c ON e.chunk_id = c.id
+        JOIN documents d ON c.document_id = d.id
+        ORDER BY e.id
+    """)
+
+    rows = [dict(row) for row in cursor.fetchall()]
+    log_event(
+        logger,
+        logging.INFO,
+        "aggregation_sources_loaded",
+        "Loaded extraction sources for aggregation",
+        stage="db",
+        extractions=len(rows),
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
+    return rows
+
+
 def get_pending_chunks() -> List[Dict[str, Any]]:
     """获取待抽取的 chunks"""
+    start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -260,11 +319,22 @@ def get_pending_chunks() -> List[Dict[str, Any]]:
         ORDER BY d.id, c.chunk_index
     """)
     
-    return [dict(row) for row in cursor.fetchall()]
+    rows = [dict(row) for row in cursor.fetchall()]
+    log_event(
+        logger,
+        logging.INFO,
+        "pending_chunks_loaded",
+        "Loaded pending chunks",
+        stage="db",
+        pending_chunks=len(rows),
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
+    return rows
 
 
 def mark_document_processed(doc_id: int) -> None:
     """标记文档为已处理"""
+    start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -272,6 +342,15 @@ def mark_document_processed(doc_id: int) -> None:
         (doc_id,)
     )
     conn.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "document_marked_processed",
+        "Marked document as processed",
+        stage="db",
+        document_id=doc_id,
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
 
 
 def add_state_evidence(
@@ -311,6 +390,55 @@ def add_state_evidence(
     return evidence_id
 
 
+def ensure_state_evidence(
+    state_id: int,
+    chunk_id: Optional[int] = None,
+    extraction_id: Optional[int] = None,
+    evidence_role: str = 'source',
+    weight: float = 1.0,
+    note: Optional[str] = None
+) -> Tuple[int, bool]:
+    """确保状态证据存在，避免重复写入。"""
+    if chunk_id is None and extraction_id is None:
+        raise ValueError("At least one of chunk_id or extraction_id must be provided")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    clauses = ["state_id = ?"]
+    params: List[Any] = [state_id]
+
+    if chunk_id is None:
+        clauses.append("chunk_id IS NULL")
+    else:
+        clauses.append("chunk_id = ?")
+        params.append(chunk_id)
+
+    if extraction_id is None:
+        clauses.append("extraction_id IS NULL")
+    else:
+        clauses.append("extraction_id = ?")
+        params.append(extraction_id)
+
+    cursor.execute(
+        f"SELECT id FROM state_evidence WHERE {' AND '.join(clauses)}",
+        tuple(params),
+    )
+    existing = cursor.fetchone()
+    if existing:
+        return existing['id'], False
+
+    evidence_id = add_state_evidence(
+        state_id=state_id,
+        chunk_id=chunk_id,
+        extraction_id=extraction_id,
+        evidence_role=evidence_role,
+        weight=weight,
+        note=note,
+    )
+    return evidence_id, True
+
+
 def get_state_evidence(state_id: int) -> List[Dict[str, Any]]:
     """获取状态的所有证据
     
@@ -331,6 +459,38 @@ def get_state_evidence(state_id: int) -> List[Dict[str, Any]]:
     """, (state_id,))
     
     return [dict(row) for row in cursor.fetchall()]
+
+
+def archive_orphan_states() -> int:
+    """归档已无任何证据支撑的活跃状态项。"""
+    start_time = perf_counter()
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE states
+        SET status = 'archived',
+            last_updated = julianday('now')
+        WHERE status = 'active'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM state_evidence se
+              WHERE se.state_id = states.id
+          )
+    """)
+
+    archived_count = cursor.rowcount
+    conn.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "orphan_states_archived",
+        "Archived active states without evidence",
+        stage="db",
+        archived_states=archived_count,
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
+    return archived_count
 
 
 def upsert_state(
@@ -486,6 +646,7 @@ def archive_state(state_id: int) -> None:
 
 def get_stats() -> Dict[str, int]:
     """获取中间层统计信息"""
+    start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -509,4 +670,13 @@ def get_stats() -> Dict[str, int]:
     cursor.execute("SELECT COUNT(*) FROM retrieval_candidates WHERE decision_status = 'pending'")
     stats['pending_candidates'] = cursor.fetchone()[0]
     
+    log_event(
+        logger,
+        logging.INFO,
+        "db_stats_collected",
+        "Collected database statistics",
+        stage="db",
+        duration_ms=(perf_counter() - start_time) * 1000,
+        **stats,
+    )
     return stats

@@ -5,13 +5,18 @@ import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+import logging
+from time import perf_counter
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from app_logging import get_logger, log_event
 from config import OUTPUT_FILE
 from db import get_connection
 
+
+logger = get_logger("output")
 
 # 输出模板配置
 OUTPUT_CONFIG = {
@@ -45,6 +50,7 @@ def select_states_for_output() -> Dict[str, List[Dict[str, Any]]]:
     
     这里实现"按需选取"逻辑，不是把整个中间层塞给输出
     """
+    start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -72,6 +78,20 @@ def select_states_for_output() -> Dict[str, List[Dict[str, Any]]]:
                     'items': items
                 }
     
+    total_items = sum(
+        len(subtype_data['items'])
+        for category_data in result.values()
+        for subtype_data in category_data.values()
+    )
+    log_event(
+        logger,
+        logging.INFO,
+        "states_selected_for_output",
+        "Selected states for output generation",
+        stage="output",
+        total_items=total_items,
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
     return result
 
 
@@ -159,6 +179,7 @@ def generate_status_document(selected_states: Dict[str, Any]) -> str:
 
 def save_output(content: str, output_path: Path = OUTPUT_FILE) -> int:
     """保存输出文档并记录快照"""
+    start_time = perf_counter()
     # 写入文件
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(content, encoding='utf-8')
@@ -178,6 +199,17 @@ def save_output(content: str, output_path: Path = OUTPUT_FILE) -> int:
     
     snapshot_id = cursor.lastrowid
     conn.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "output_saved",
+        "Saved output document and snapshot",
+        stage="output",
+        output_path=output_path,
+        snapshot_id=snapshot_id,
+        total_items=content.count("\n- **"),
+        duration_ms=(perf_counter() - start_time) * 1000,
+    )
     
     return snapshot_id
 
@@ -188,6 +220,7 @@ def generate_output() -> Dict[str, Any]:
     Returns:
         处理结果信息
     """
+    stage_start = perf_counter()
     # 1. 从中间层选择状态
     selected = select_states_for_output()
     
@@ -203,9 +236,21 @@ def generate_output() -> Dict[str, Any]:
         for sub_data in cat_data.values():
             total_items += len(sub_data['items'])
     
-    return {
+    result = {
         'snapshot_id': snapshot_id,
         'output_path': str(OUTPUT_FILE),
         'total_items': total_items,
         'content_length': len(content)
     }
+    log_event(
+        logger,
+        logging.INFO,
+        "output_generation_done",
+        "Completed output generation",
+        stage="output",
+        snapshot_id=snapshot_id,
+        output_path=OUTPUT_FILE,
+        total_items=total_items,
+        duration_ms=(perf_counter() - stage_start) * 1000,
+    )
+    return result
