@@ -309,6 +309,7 @@ def get_pending_chunks() -> List[Dict[str, Any]]:
     
     cursor.execute("""
         SELECT c.id, c.document_id, c.chunk_index, c.text, c.token_estimate,
+               c.section_label,
                d.path, d.title
         FROM chunks c
         JOIN documents d ON c.document_id = d.id

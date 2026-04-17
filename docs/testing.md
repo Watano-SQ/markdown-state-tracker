@@ -24,6 +24,7 @@ cp .env.example .env
 
 ```bash
 python main.py --help
+python -m unittest test_input_layer.py
 python test_extraction_schema.py
 python -m unittest test_aggregator.py
 python -m unittest test_logging.py
@@ -78,6 +79,7 @@ sqlite3 data/state.db "SELECT COUNT(*) FROM extractions;"
 
 - `--skip-extraction` 会创建或更新数据库与输出文件
 - 现有测试不依赖真实 API
+- 输入边界与来源类型改动应至少跑 `python -m unittest test_input_layer.py`
 - 在已有 `extractions` 的情况下，主流程会尝试聚合并生成 `states`
 - 日志中应能看到 pipeline 和 extraction 事件
 

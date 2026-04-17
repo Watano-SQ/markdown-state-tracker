@@ -168,3 +168,52 @@
   - 某些历史归档文档仍会保留旧路径引用，只作为历史上下文
 - Follow-up:
   - 后续若测试命令变化，优先更新 `docs/testing.md`，其余活跃文档只做链接或简短说明
+
+## 2026-04-17
+
+### 决策
+
+输入层正式改为显式样本纳入规则，而不是扫描 `input_docs/` 下全部 `*.md`。
+
+- Why:
+  - 第一阶段输出质量要求需要把规则文档、测试夹具和正式样本拆开
+  - 仅靠“文件恰好没有被抽取”不足以防止污染主链路
+- Alternatives rejected:
+  - 继续扫描全部 `*.md`，把过滤责任留给后续抽取或聚合
+  - 仅靠人工约定，不在代码里落下显式规则
+- Risk / debt accepted:
+  - 当前规则仍是最小集合，主要覆盖 `AGENTS.md`、`test_*.md` 和夹具目录
+  - 未来若出现新的控制文件命名约定，仍需补充规则
+- Follow-up:
+  - 若 `input_docs/` 的样本组织方式发生变化，同步更新 `layers/input_layer.py`、`docs/architecture.md` 和相关 spec
+
+### 决策
+
+输入层 chunking 只把作者正文叙述块送入抽取链路；front matter、元数据表格、引用块、结构化转储、媒体占位与明显教程说明默认不进入正文抽取。
+
+- Why:
+  - 现有抽取层仍把 chunk 视为正文来源，若不在输入层先分流，非作者内容会继续污染 `state_candidates`
+  - 这与 `state_output_quality` 第一阶段 spec 的边界一致
+- Alternatives rejected:
+  - 保留所有块为普通 chunk，再指望抽取 prompt 或聚合层兜底
+  - 为此引入更重的 schema 或新服务
+- Risk / debt accepted:
+  - 外部资料/教程说明的识别目前仍是轻量启发式，不是完整语义判别
+  - “仅作为上下文”的块还没有单独持久化通道
+- Follow-up:
+  - 若后续需要把上下文块正式接入抽取上下文，优先评估在现有 schema 下的最小扩展
+
+### 决策
+
+`documents.content_hash` 的计算现在包含输入处理版本，用于在扫描/切块规则变化时强制重处理既有文档，而不依赖 `--init`。
+
+- Why:
+  - 输入边界和切块语义变化后，仅比较原始内容 hash 无法触发老文档重切分
+  - 破坏性重建数据库不应成为默认升级路径
+- Alternatives rejected:
+  - 要求用户手动运行 `python main.py --init`
+  - 在现有 schema 上额外引入单独的 chunking 版本字段
+- Risk / debt accepted:
+  - `content_hash` 现在更接近“输入处理指纹”，不再是纯内容 hash
+- Follow-up:
+  - 后续若再次调整输入边界或 chunk 语义，需要显式更新输入处理版本并记录到本文件

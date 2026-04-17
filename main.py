@@ -117,6 +117,7 @@ def run_extraction(pending_chunks: list, verbose: bool = True) -> dict:
             context = {
                 'document_title': chunk.get('title'),
                 'chunk_position': 'middle',  # 简化处理
+                'section': chunk.get('section_label'),
             }
             
             # 抽取
@@ -242,6 +243,10 @@ def run_pipeline(skip_extraction: bool = False, verbose: bool = True) -> dict:
         results['input'] = input_result
         _console_print(verbose, f"  - 扫描到 {input_result['total']} 个文档")
         _console_print(verbose, f"  - 新增: {input_result['new']}, 修改: {input_result['modified']}")
+        if input_result.get('skipped'):
+            _console_print(verbose, f"  - 显式排除: {input_result['skipped']}")
+        if input_result.get('purged_excluded'):
+            _console_print(verbose, f"  - 清理旧排除文档: {input_result['purged_excluded']}")
         for processed in input_result['processed']:
             status = "新增" if processed['is_new'] else "更新"
             _console_print(verbose, f"    [{status}] {processed['path']} -> {processed['chunk_count']} chunks")
@@ -254,6 +259,8 @@ def run_pipeline(skip_extraction: bool = False, verbose: bool = True) -> dict:
             total_documents=input_result['total'],
             new_documents=input_result['new'],
             modified_documents=input_result['modified'],
+            skipped_documents=input_result.get('skipped', 0),
+            purged_documents=input_result.get('purged_excluded', 0),
             processed_documents=len(input_result['processed']),
             duration_ms=(perf_counter() - input_start) * 1000,
         )

@@ -7,7 +7,7 @@
 当前主流程：
 
 1. 扫描 Markdown 文档
-2. 基于内容 hash 识别新增或修改
+2. 基于带输入处理版本的内容 hash 识别新增或修改
 3. chunk 切分并落库
 4. 按需执行 LLM 抽取
 5. 聚合 `state_candidates -> states/state_evidence`
@@ -34,9 +34,10 @@
   - 初始化和关闭
 - [layers/input_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/input_layer.py)
   - 扫描
+  - 显式样本纳入规则（当前至少排除 `AGENTS.md`、`test_*.md` 与夹具目录）
   - 标题提取
   - 变更检测
-  - chunk 切分
+  - 来源类型感知的 chunk 切分
   - documents/chunks 落库
 - [layers/middle_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/middle_layer.py)
   - `ExtractionResult` 相关 dataclass
@@ -109,6 +110,7 @@
   - 文档级状态和 chunk 级完成语义还不够稳固
 - `input_docs/`
   - 当前包含样例，也可能包含接近真实的个人/项目内容
+  - 正式扫描链路不会默认纳入控制文档和测试夹具
   - 应按潜在敏感数据处理
 - `config.py`
   - 导入即创建目录，存在副作用
