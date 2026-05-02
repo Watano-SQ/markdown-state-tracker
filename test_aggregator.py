@@ -39,6 +39,8 @@ class AggregatorTests(unittest.TestCase):
         subtype: str = "ongoing_project",
         detail: str | None = None,
         confidence: float = 0.8,
+        subject_type: str | None = None,
+        subject_key: str | None = None,
     ) -> tuple[int, int]:
         conn = db_connection.get_connection()
         cursor = conn.cursor()
@@ -69,6 +71,8 @@ class AggregatorTests(unittest.TestCase):
                     subtype=subtype,
                     detail=detail,
                     confidence=confidence,
+                    subject_type=subject_type,
+                    subject_key=subject_key,
                 )
             ]
         )
@@ -149,6 +153,39 @@ class AggregatorTests(unittest.TestCase):
 
         self.assertEqual(state_row["category"], "dynamic")
         self.assertEqual(state_row["subtype"], "active_interest")
+
+    def test_aggregate_extractions_rejects_explicit_unknown_subject(self) -> None:
+        self.seed_extraction(
+            summary="这是一条主体不明的教程建议",
+            subject_type="unknown",
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+        evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+
+        self.assertEqual(result["state_candidates"], 1)
+        self.assertEqual(result["aggregated_candidates"], 0)
+        self.assertEqual(result["skipped_candidates"], 1)
+        self.assertEqual(state_count, 0)
+        self.assertEqual(evidence_count, 0)
+
+    def test_aggregate_extractions_requires_subject_key_when_subject_type_present(self) -> None:
+        self.seed_extraction(
+            summary="团队正在推进上线准备",
+            subject_type="team",
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+
+        self.assertEqual(result["aggregated_candidates"], 0)
+        self.assertEqual(result["skipped_candidates"], 1)
+        self.assertEqual(state_count, 0)
 
 
 if __name__ == "__main__":

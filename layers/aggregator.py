@@ -37,6 +37,7 @@ SUPPORTED_SUBTYPES = {
     "skill": "static",
     "relationship": "static",
 }
+SUPPORTED_SUBJECT_TYPES = {"person", "team", "project", "organization"}
 SUBTYPE_ALIASES = {
     "ongoing_learning": "active_interest",
     "interest": "active_interest",
@@ -89,8 +90,26 @@ def _normalize_category_and_subtype(
     return normalized_category, DEFAULT_SUBTYPE_BY_CATEGORY[normalized_category]
 
 
+def _candidate_subject_is_eligible(candidate: Any) -> bool:
+    """对显式主体线索做最小准入裁决，缺失字段按 legacy 数据兼容。"""
+    subject_type = _clean_text(getattr(candidate, "subject_type", None))
+    subject_key = _clean_text(getattr(candidate, "subject_key", None), limit=120)
+
+    if subject_type is None:
+        return True
+
+    normalized_subject_type = subject_type.lower()
+    if normalized_subject_type not in SUPPORTED_SUBJECT_TYPES:
+        return False
+
+    return subject_key is not None
+
+
 def _normalize_state_candidate(candidate: Any) -> Optional[Dict[str, Any]]:
     """将 StateCandidate 规范化为 states 表可用字段。"""
+    if not _candidate_subject_is_eligible(candidate):
+        return None
+
     summary = _clean_text(getattr(candidate, "summary", None), limit=200)
     if not summary:
         return None

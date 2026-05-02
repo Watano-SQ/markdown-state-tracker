@@ -42,7 +42,9 @@ def test_with_data():
     context = ExtractionContext(
         chunk_position="middle",
         document_title="2024年3月工作日志",
+        document_author="Alice",
         document_time=doc_time,
+        document_mode="personal",
         section="技术学习"
     )
     
@@ -70,7 +72,9 @@ def test_with_data():
             subtype="ongoing_learning",
             detail="通过《Rust 权威指南》进行系统学习",
             time=doc_time,
-            confidence=0.85
+            confidence=0.85,
+            subject_type="person",
+            subject_key="Alice",
         )
     ]
     
@@ -111,6 +115,10 @@ def test_with_data():
     assert len(result.relation_candidates) == 1
     assert len(result.retrieval_candidates) == 1
     assert result.context.document_title == "2024年3月工作日志"
+    assert result.context.document_author == "Alice"
+    assert result.context.document_mode == "personal"
+    assert result.state_candidates[0].subject_type == "person"
+    assert result.state_candidates[0].subject_key == "Alice"
     assert result.events[0].time.source == "explicit"
     
     print("[PASS] 完整数据创建测试通过")
@@ -148,6 +156,7 @@ def test_from_dict():
                 "source": "document_context",
                 "raw": None
             },
+            "document_mode": "personal",
             "section": "测试章节"
         },
         "entities": [
@@ -179,6 +188,8 @@ def test_from_dict():
                 "subtype": "learning",
                 "detail": None,
                 "time": None,
+                "subject_type": "person",
+                "subject_key": "Alice",
                 "confidence": 0.8
             }
         ],
@@ -190,6 +201,7 @@ def test_from_dict():
     
     assert result.context.document_title == "测试文档"
     assert result.context.document_time.normalized == "2024-03"
+    assert result.context.document_mode == "personal"
     assert len(result.entities) == 1
     assert result.entities[0].text == "Python"
     assert len(result.events) == 1
@@ -197,6 +209,8 @@ def test_from_dict():
     assert result.events[0].participants == ["Alice"]
     assert len(result.state_candidates) == 1
     assert result.state_candidates[0].summary == "正在学习 Python"
+    assert result.state_candidates[0].subject_type == "person"
+    assert result.state_candidates[0].subject_key == "Alice"
     
     print("[PASS] from_dict 测试通过")
 

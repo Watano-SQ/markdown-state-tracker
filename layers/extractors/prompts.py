@@ -17,16 +17,21 @@ SYSTEM_PROMPT = """你是一个专业的信息抽取助手，擅长从 Markdown 
 重要原则：
 1. 严格遵循 JSON Schema，所有字段类型必须正确
 2. 时间信息必须标注来源（explicit/document_context/inferred/unknown）
-3. 对不确定的信息降低置信度（0.3-0.5），不要捏造
-4. 检索候选用于标记需要进一步明确的对象
-5. 如果某类信息不存在，返回空数组 []
-6. 只返回 JSON，不要添加任何解释文字"""
+3. state_candidates 必须尽量标注 subject_type 与 subject_key；主体不明时使用 subject_type=unknown，不要捏造
+4. 对不确定的信息降低置信度（0.3-0.5），不要捏造
+5. 检索候选用于标记需要进一步明确的对象
+6. 如果某类信息不存在，返回空数组 []
+7. 只返回 JSON，不要添加任何解释文字"""
 
 
 # JSON Schema 定义
 JSON_SCHEMA = """{
   "context": {
     "chunk_position": "start|middle|end（可选，文本在文档中的位置）",
+    "document_title": "文档标题（可选）",
+    "document_author": "文档作者线索（可选，不等同于状态主体）",
+    "document_time": {"normalized": "文档默认时间（可选）", "source": "document_context", "raw": "原始时间（可选）"},
+    "document_mode": "personal|team|hybrid（可选，文档解释模式）",
     "section": "所属章节标题（可选）"
   },
   "entities": [
@@ -62,6 +67,8 @@ JSON_SCHEMA = """{
         "source": "explicit|document_context|inferred|unknown",
         "raw": "原始文本（可选）"
       },
+      "subject_type": "person|team|project|organization|unknown（必需，状态主体类型）",
+      "subject_key": "主体稳定标识；unknown 时可为空（可选）",
       "confidence": 0.0-1.0（必需）
     }
   ],
@@ -112,6 +119,16 @@ TIME_SOURCE_GUIDE = """
 """
 
 
+SUBJECT_ATTRIBUTION_GUIDE = """
+主体归属指南：
+- document_author 只是解释线索，不等同于状态主体
+- document_mode 只表示文档整体倾向，不能替代候选级主体判断
+- subject_type 可选值：person、team、project、organization、unknown
+- subject_key 应尽量稳定，例如明确人名、团队名、项目名或组织名；不要用 summary 原文当 key
+- 主体不明、只是通用建议、教程知识、引用资料或第三方事实时，使用 subject_type=unknown
+"""
+
+
 def build_user_prompt(
     text: str,
     context: Optional[Dict[str, Any]] = None,
@@ -139,6 +156,8 @@ def build_user_prompt(
         context_parts.append(f"- 文档作者: {context['document_author']}")
     if context.get('document_time'):
         context_parts.append(f"- 文档时间: {_format_document_time(context['document_time'])}")
+    if context.get('document_mode'):
+        context_parts.append(f"- 文档模式: {context['document_mode']}")
     if context.get('chunk_position'):
         context_parts.append(f"- 文本位置: {context['chunk_position']}")
     if context.get('section'):
@@ -175,11 +194,14 @@ def build_user_prompt(
 
 {TIME_SOURCE_GUIDE}
 
+{SUBJECT_ATTRIBUTION_GUIDE}
+
 【注意事项】
 1. confidence 值：明确信息用 0.9-1.0，推断信息用 0.6-0.8，不确定用 0.3-0.5
 2. 如果某类信息不存在，返回空数组 []
 3. 检索候选（retrieval_candidates）用于标记缩写、代称、模糊指代等需要进一步明确的对象
-4. 时间的 source 字段必填，normalized 字段尽量填写（如果能推断出具体或大致时间）"""
+4. 时间的 source 字段必填，normalized 字段尽量填写（如果能推断出具体或大致时间）
+5. state_candidate 的 subject_type 必填；subject_type 不是 unknown 时，subject_key 必填"""
 
 
 def _format_document_time(document_time: Any) -> str:

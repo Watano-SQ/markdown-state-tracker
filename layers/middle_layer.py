@@ -82,6 +82,8 @@ class StateCandidate:
         detail: 详细信息（可选）
         time: 时间信息（可选）
         confidence: 置信度（0-1）
+        subject_type: 候选主体类型（person/team/project/organization/unknown，可选）
+        subject_key: 候选主体稳定标识（可选）
     """
     summary: str
     category: Optional[str] = None
@@ -89,6 +91,8 @@ class StateCandidate:
     detail: Optional[str] = None
     time: Optional[TimeInfo] = None
     confidence: float = 1.0
+    subject_type: Optional[str] = None
+    subject_key: Optional[str] = None
 
 
 @dataclass
@@ -132,12 +136,16 @@ class ExtractionContext:
     Attributes:
         chunk_position: chunk 在文档中的位置（start/middle/end）
         document_title: 文档标题（可选）
+        document_author: 文档作者线索（可选，不等同于状态主体）
         document_time: 文档默认时间上下文（可选）
+        document_mode: 文档解释模式（personal/team/hybrid，可选）
         section: 所属章节（可选）
     """
     chunk_position: Optional[str] = None  # start | middle | end
     document_title: Optional[str] = None
+    document_author: Optional[str] = None
     document_time: Optional[TimeInfo] = None
+    document_mode: Optional[str] = None
     section: Optional[str] = None
 
 

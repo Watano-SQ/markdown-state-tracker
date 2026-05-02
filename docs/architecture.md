@@ -44,9 +44,11 @@
   - `ExtractionResult` 相关 dataclass
   - extractions / states / state_evidence / retrieval_candidates / stats
   - chunk 级 pending 查询与文档完成标记
+  - extraction JSON 可携带 `document_mode` 与候选级 `subject_type` / `subject_key`
 - [layers/aggregator.py](/D:/Apps/Python/lab/personal_prompt/layers/aggregator.py)
   - 读取 `extractions`
   - 规范化 `state_candidates`
+  - 对显式 unknown 或缺少 subject_key 的主体候选做最小保守拒绝
   - 写入 `states` 与 `state_evidence`
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
   - 选择活跃状态
@@ -144,6 +146,7 @@
 - `relation_candidates` / `retrieval_candidates` 仍未接入正式持久化链路
 - 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
+- 主体字段目前只存在于 extraction JSON 与聚合准入逻辑中，尚未进入 `states` schema 或主体 registry
 - 仓库没有配置 lint/typecheck/CI 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认
 - 保留文档之间若出现冲突，当前默认以代码和本文件为准；更正式的权威顺序仍需要人类确认

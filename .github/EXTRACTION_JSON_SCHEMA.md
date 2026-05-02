@@ -35,7 +35,9 @@ class ExtractionResult:
 class ExtractionContext:
     chunk_position: Optional[str] = None     # start | middle | end
     document_title: Optional[str] = None     # 文档标题
+    document_author: Optional[str] = None    # 文档作者线索，不等同于状态主体
     document_time: Optional[TimeInfo] = None # 文档默认时间上下文
+    document_mode: Optional[str] = None      # personal | team | hybrid
     section: Optional[str] = None            # 所属章节
 ```
 
@@ -45,10 +47,12 @@ class ExtractionContext:
   "context": {
     "chunk_position": "start",
     "document_title": "项目周报 2024-03",
+    "document_author": "张三",
     "document_time": {
       "normalized": "2024-03",
       "source": "document_context"
     },
+    "document_mode": "team",
     "section": "本周进展"
   }
 }
@@ -156,6 +160,8 @@ class StateCandidate:
     detail: Optional[str] = None            # 详细信息
     time: Optional[TimeInfo] = None         # 时间信息
     confidence: float = 1.0                 # 置信度
+    subject_type: Optional[str] = None      # person | team | project | organization | unknown
+    subject_key: Optional[str] = None       # 主体稳定标识；unknown 时可空
 ```
 
 **注意：**
@@ -174,7 +180,9 @@ class StateCandidate:
     "normalized": "2024-03",
     "source": "document_context"
   },
-  "confidence": 0.85
+  "confidence": 0.85,
+  "subject_type": "person",
+  "subject_key": "张三"
 }
 ```
 
@@ -246,10 +254,12 @@ class RetrievalCandidate:
   "context": {
     "chunk_position": "middle",
     "document_title": "2024年3月工作日志",
+    "document_author": "张三",
     "document_time": {
       "normalized": "2024-03",
       "source": "document_context"
     },
+    "document_mode": "personal",
     "section": "技术学习"
   },
   "entities": [
@@ -287,12 +297,16 @@ class RetrievalCandidate:
         "normalized": "2024-03",
         "source": "document_context"
       },
+      "subject_type": "person",
+      "subject_key": "张三",
       "confidence": 0.85
     },
     {
       "summary": "对系统编程感兴趣",
       "category": "static",
       "subtype": "interest",
+      "subject_type": "person",
+      "subject_key": "张三",
       "confidence": 0.7
     }
   ],
@@ -335,7 +349,9 @@ event_time = TimeInfo(
 context = ExtractionContext(
     chunk_position="middle",
     document_title="2024年3月工作日志",
+    document_author="张三",
     document_time=doc_time,
+    document_mode="personal",
     section="技术学习"
 )
 
@@ -363,7 +379,9 @@ state_candidates = [
         subtype="ongoing_learning",
         detail="通过《Rust 权威指南》进行系统学习",
         time=doc_time,
-        confidence=0.85
+        confidence=0.85,
+        subject_type="person",
+        subject_key="张三"
     )
 ]
 
