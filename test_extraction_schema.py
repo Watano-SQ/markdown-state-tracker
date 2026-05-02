@@ -68,6 +68,8 @@ def test_with_data():
     state_candidates = [
         StateCandidate(
             summary="正在学习 Rust 编程语言",
+            canonical_summary="学习 Rust 编程语言",
+            display_summary="正在学习 Rust 编程语言",
             category="dynamic",
             subtype="ongoing_learning",
             detail="通过《Rust 权威指南》进行系统学习",
@@ -119,6 +121,8 @@ def test_with_data():
     assert result.context.document_mode == "personal"
     assert result.state_candidates[0].subject_type == "person"
     assert result.state_candidates[0].subject_key == "Alice"
+    assert result.state_candidates[0].canonical_summary == "学习 Rust 编程语言"
+    assert result.state_candidates[0].display_summary == "正在学习 Rust 编程语言"
     assert result.events[0].time.source == "explicit"
     
     print("[PASS] 完整数据创建测试通过")
@@ -184,6 +188,8 @@ def test_from_dict():
         "state_candidates": [
             {
                 "summary": "正在学习 Python",
+                "canonical_summary": "学习 Python",
+                "display_summary": "正在学习 Python",
                 "category": "dynamic",
                 "subtype": "learning",
                 "detail": None,
@@ -209,6 +215,8 @@ def test_from_dict():
     assert result.events[0].participants == ["Alice"]
     assert len(result.state_candidates) == 1
     assert result.state_candidates[0].summary == "正在学习 Python"
+    assert result.state_candidates[0].canonical_summary == "学习 Python"
+    assert result.state_candidates[0].display_summary == "正在学习 Python"
     assert result.state_candidates[0].subject_type == "person"
     assert result.state_candidates[0].subject_key == "Alice"
     

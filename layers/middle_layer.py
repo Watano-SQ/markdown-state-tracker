@@ -77,6 +77,8 @@ class StateCandidate:
     
     Attributes:
         summary: 状态摘要
+        canonical_summary: 稳定语义摘要（可选，用于 state identity）
+        display_summary: 展示摘要（可选，用于输出文案）
         category: 大类建议（dynamic/static）
         subtype: 小类建议（可选）
         detail: 详细信息（可选）
@@ -86,6 +88,8 @@ class StateCandidate:
         subject_key: 候选主体稳定标识（可选）
     """
     summary: str
+    canonical_summary: Optional[str] = None
+    display_summary: Optional[str] = None
     category: Optional[str] = None
     subtype: Optional[str] = None
     detail: Optional[str] = None
@@ -532,7 +536,11 @@ def upsert_state(
     summary: str,
     detail: Optional[str] = None,
     chunk_ids: Optional[List[int]] = None,  # 重命名参数但保持兼容
-    confidence: float = 1.0
+    confidence: float = 1.0,
+    subject_type: Optional[str] = None,
+    subject_key: Optional[str] = None,
+    canonical_summary: Optional[str] = None,
+    display_summary: Optional[str] = None
 ) -> int:
     """插入或更新状态项
     
@@ -546,18 +554,37 @@ def upsert_state(
         detail: 详情
         chunk_ids: chunk ID 列表（将自动添加到 state_evidence）
         confidence: 置信度
+        subject_type: 主体类型（可选）
+        subject_key: 主体稳定标识（可选）
+        canonical_summary: 稳定语义摘要（可选，用于匹配）
+        display_summary: 展示摘要（可选，用于输出兼容）
     
     Returns:
         state_id
     """
     conn = get_connection()
     cursor = conn.cursor()
+    identity_summary = canonical_summary or summary
+    visible_summary = display_summary or summary
     
-    # 简单匹配：相同 category + subtype + 相似 summary
+    # Match canonical identity while preserving compatibility with legacy rows.
     cursor.execute("""
         SELECT id FROM states 
-        WHERE category = ? AND subtype = ? AND summary = ? AND status = 'active'
-    """, (category, subtype, summary))
+        WHERE category = ?
+          AND subtype = ?
+          AND COALESCE(canonical_summary, summary) = ?
+          AND ((? IS NULL AND subject_type IS NULL) OR subject_type = ?)
+          AND ((? IS NULL AND subject_key IS NULL) OR subject_key = ?)
+          AND status = 'active'
+    """, (
+        category,
+        subtype,
+        identity_summary,
+        subject_type,
+        subject_type,
+        subject_key,
+        subject_key,
+    ))
     
     existing = cursor.fetchone()
     
@@ -566,11 +593,25 @@ def upsert_state(
         state_id = existing['id']
         cursor.execute("""
             UPDATE states 
-            SET detail = COALESCE(?, detail),
+            SET summary = ?,
+                display_summary = ?,
+                canonical_summary = COALESCE(canonical_summary, ?),
+                subject_type = COALESCE(subject_type, ?),
+                subject_key = COALESCE(subject_key, ?),
+                detail = COALESCE(?, detail),
                 confidence = ?,
                 last_updated = julianday('now')
             WHERE id = ?
-        """, (detail, confidence, state_id))
+        """, (
+            visible_summary,
+            visible_summary,
+            identity_summary,
+            subject_type,
+            subject_key,
+            detail,
+            confidence,
+            state_id,
+        ))
         
         # 添加新的证据（如果有）
         if chunk_ids:
@@ -585,9 +626,29 @@ def upsert_state(
     else:
         # 创建新状态
         cursor.execute("""
-            INSERT INTO states (category, subtype, summary, detail, confidence)
-            VALUES (?, ?, ?, ?, ?)
-        """, (category, subtype, summary, detail, confidence))
+            INSERT INTO states (
+                category,
+                subtype,
+                subject_type,
+                subject_key,
+                canonical_summary,
+                display_summary,
+                summary,
+                detail,
+                confidence
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            category,
+            subtype,
+            subject_type,
+            subject_key,
+            identity_summary,
+            visible_summary,
+            visible_summary,
+            detail,
+            confidence,
+        ))
         state_id = cursor.lastrowid
         
         # 添加证据

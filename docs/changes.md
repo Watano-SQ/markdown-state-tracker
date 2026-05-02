@@ -267,3 +267,20 @@ extraction JSON 开始支持 `document_mode` 以及 state candidate 级 `subject
   - `document_mode` 只是 extraction context 中的 prior，不替代候选级主体归属
 - Follow-up:
   - 后续统一状态底座阶段应评估 subject-aware state identity 与 schema 迁移边界
+
+### 决策
+
+`states` 表以 additive 字段保存 `subject_type` / `subject_key` / `canonical_summary` / `display_summary`；aggregator 按 `subject_type` / `subject_key` / category / subtype / `canonical_summary` 合并 state，`summary` 暂时保留为输出兼容字段。
+
+- Why:
+  - 第三阶段统一状态底座需要把语义身份和展示文案拆开，避免 raw summary 改写直接制造新 state
+  - 主体归属已经进入候选准入，下一步需要把主体维度纳入 state identity，而不是只停留在 extraction JSON
+- Alternatives rejected:
+  - 继续只用 category / subtype / summary 做去重键
+  - 立刻引入主体 registry、层级 state、关系图谱或完整迁移框架
+- Risk / debt accepted:
+  - 这是 additive schema 升级，启动时只补缺失列，不重建 `data/state.db`
+  - 历史 state 没有主体和 canonical 信息；旧行通过 `COALESCE(canonical_summary, summary)` 保持兼容，但不会自动反推主体
+  - `summary` 仍作为当前输出兼容字段存在，后续 profile 阶段再收敛输出消费方式
+- Follow-up:
+  - 后续输出 profile 阶段应优先消费 `display_summary`，并评估是否需要把 `summary` 降级为兼容字段

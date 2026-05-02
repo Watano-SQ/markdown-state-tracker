@@ -25,6 +25,7 @@ class AggregatorTests(unittest.TestCase):
         close_connection()
         db_connection.DB_PATH = self.temp_db_path
         init_db()
+        self.seed_counter = 0
 
     def tearDown(self) -> None:
         close_connection()
@@ -41,16 +42,25 @@ class AggregatorTests(unittest.TestCase):
         confidence: float = 0.8,
         subject_type: str | None = None,
         subject_key: str | None = None,
+        canonical_summary: str | None = None,
+        display_summary: str | None = None,
     ) -> tuple[int, int]:
         conn = db_connection.get_connection()
         cursor = conn.cursor()
+        self.seed_counter += 1
 
         cursor.execute(
             """
             INSERT INTO documents (path, title, modified_time, content_hash, status)
             VALUES (?, ?, ?, ?, ?)
             """,
-            ("demo.md", "Demo", 1.0, "hash-demo", "processed"),
+            (
+                f"demo-{self.seed_counter}.md",
+                "Demo",
+                1.0,
+                f"hash-demo-{self.seed_counter}",
+                "processed",
+            ),
         )
         document_id = cursor.lastrowid
 
@@ -67,6 +77,8 @@ class AggregatorTests(unittest.TestCase):
             state_candidates=[
                 StateCandidate(
                     summary=summary,
+                    canonical_summary=canonical_summary,
+                    display_summary=display_summary,
                     category=category,
                     subtype=subtype,
                     detail=detail,
@@ -136,6 +148,66 @@ class AggregatorTests(unittest.TestCase):
         self.assertEqual(second["evidence_added"], 0)
         self.assertEqual(state_count, 1)
         self.assertEqual(evidence_count, 1)
+
+    def test_aggregate_extractions_merges_same_subject_and_canonical_summary(self) -> None:
+        self.seed_extraction(
+            summary="Alice is learning Rust",
+            display_summary="Alice is learning Rust",
+            canonical_summary="learn Rust",
+            subject_type="person",
+            subject_key="alice",
+        )
+        self.seed_extraction(
+            summary="Alice keeps studying Rust",
+            display_summary="Alice keeps studying Rust",
+            canonical_summary="learn Rust",
+            subject_type="person",
+            subject_key="alice",
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        state_rows = conn.execute(
+            """
+            SELECT subject_type, subject_key, canonical_summary, display_summary, summary
+            FROM states
+            """
+        ).fetchall()
+        evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+
+        self.assertEqual(result["aggregated_candidates"], 2)
+        self.assertEqual(len(state_rows), 1)
+        self.assertEqual(evidence_count, 2)
+        self.assertEqual(state_rows[0]["subject_type"], "person")
+        self.assertEqual(state_rows[0]["subject_key"], "alice")
+        self.assertEqual(state_rows[0]["canonical_summary"], "learn Rust")
+        self.assertEqual(state_rows[0]["display_summary"], "Alice keeps studying Rust")
+        self.assertEqual(state_rows[0]["summary"], "Alice keeps studying Rust")
+
+    def test_aggregate_extractions_keeps_same_canonical_for_different_subjects(self) -> None:
+        self.seed_extraction(
+            summary="Alice is learning Rust",
+            canonical_summary="learn Rust",
+            subject_type="person",
+            subject_key="alice",
+        )
+        self.seed_extraction(
+            summary="Bob is learning Rust",
+            canonical_summary="learn Rust",
+            subject_type="person",
+            subject_key="bob",
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+        evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+
+        self.assertEqual(result["aggregated_candidates"], 2)
+        self.assertEqual(state_count, 2)
+        self.assertEqual(evidence_count, 2)
 
     def test_aggregate_extractions_maps_legacy_subtype_to_supported_output_subtype(self) -> None:
         self.seed_extraction(

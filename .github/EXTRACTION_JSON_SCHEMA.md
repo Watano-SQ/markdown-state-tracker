@@ -155,6 +155,8 @@ chunk 中观察到的状态候选，不是最终的 state。
 @dataclass
 class StateCandidate:
     summary: str                            # 状态摘要
+    canonical_summary: Optional[str] = None # 稳定语义摘要，用于 state identity
+    display_summary: Optional[str] = None   # 展示摘要，用于输出文案
     category: Optional[str] = None          # 大类建议（dynamic/static）
     subtype: Optional[str] = None           # 小类建议
     detail: Optional[str] = None            # 详细信息
@@ -168,11 +170,15 @@ class StateCandidate:
 - 这是候选，需要后续聚合成正式的 state
 - 不同 chunk 可能提取出重复或冲突的候选
 - category/subtype 只是建议，最终由聚合逻辑决定
+- `canonical_summary` 可选；缺省时聚合层使用 `summary` 作为 canonical 语义
+- `display_summary` 可选；缺省时输出层使用 `summary` 作为展示文案
 
 **示例：**
 ```json
 {
   "summary": "正在学习 Rust 编程语言",
+  "canonical_summary": "学习 Rust 编程语言",
+  "display_summary": "正在学习 Rust 编程语言",
   "category": "dynamic",
   "subtype": "ongoing_learning",
   "detail": "已完成前三章内容",
@@ -290,6 +296,8 @@ class RetrievalCandidate:
   "state_candidates": [
     {
       "summary": "正在学习 Rust 编程语言",
+      "canonical_summary": "学习 Rust 编程语言",
+      "display_summary": "正在学习 Rust 编程语言",
       "category": "dynamic",
       "subtype": "ongoing_learning",
       "detail": "通过《Rust 权威指南》进行系统学习",
@@ -303,6 +311,8 @@ class RetrievalCandidate:
     },
     {
       "summary": "对系统编程感兴趣",
+      "canonical_summary": "对系统编程感兴趣",
+      "display_summary": "对系统编程感兴趣",
       "category": "static",
       "subtype": "interest",
       "subject_type": "person",
@@ -375,6 +385,8 @@ events = [
 state_candidates = [
     StateCandidate(
         summary="正在学习 Rust 编程语言",
+        canonical_summary="学习 Rust 编程语言",
+        display_summary="正在学习 Rust 编程语言",
         category="dynamic",
         subtype="ongoing_learning",
         detail="通过《Rust 权威指南》进行系统学习",

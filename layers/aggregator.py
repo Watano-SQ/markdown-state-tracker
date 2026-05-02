@@ -90,42 +90,59 @@ def _normalize_category_and_subtype(
     return normalized_category, DEFAULT_SUBTYPE_BY_CATEGORY[normalized_category]
 
 
-def _candidate_subject_is_eligible(candidate: Any) -> bool:
-    """对显式主体线索做最小准入裁决，缺失字段按 legacy 数据兼容。"""
+def _normalize_subject(candidate: Any) -> Optional[tuple[Optional[str], Optional[str]]]:
+    """Normalize subject clues, preserving legacy candidates with no subject."""
     subject_type = _clean_text(getattr(candidate, "subject_type", None))
     subject_key = _clean_text(getattr(candidate, "subject_key", None), limit=120)
 
     if subject_type is None:
-        return True
+        return None, None
 
     normalized_subject_type = subject_type.lower()
     if normalized_subject_type not in SUPPORTED_SUBJECT_TYPES:
-        return False
+        return None
 
-    return subject_key is not None
+    if subject_key is None:
+        return None
+
+    return normalized_subject_type, subject_key
 
 
 def _normalize_state_candidate(candidate: Any) -> Optional[Dict[str, Any]]:
     """将 StateCandidate 规范化为 states 表可用字段。"""
-    if not _candidate_subject_is_eligible(candidate):
+    normalized_subject = _normalize_subject(candidate)
+    if normalized_subject is None:
         return None
+    subject_type, subject_key = normalized_subject
 
     summary = _clean_text(getattr(candidate, "summary", None), limit=200)
     if not summary:
         return None
+    canonical_summary = (
+        _clean_text(getattr(candidate, "canonical_summary", None), limit=200)
+        or summary
+    )
+    display_summary = (
+        _clean_text(getattr(candidate, "display_summary", None), limit=200)
+        or summary
+    )
 
     category, subtype = _normalize_category_and_subtype(
         getattr(candidate, "category", None),
         getattr(candidate, "subtype", None),
     )
     detail = _clean_text(getattr(candidate, "detail", None), limit=500)
-    if detail == summary:
+    if detail in {summary, canonical_summary, display_summary}:
         detail = None
 
     return {
         "category": category,
         "subtype": subtype,
-        "summary": summary,
+        "summary": display_summary,
+        "canonical_summary": canonical_summary,
+        "display_summary": display_summary,
+        "subject_type": subject_type,
+        "subject_key": subject_key,
         "detail": detail,
         "confidence": _normalize_confidence(getattr(candidate, "confidence", 1.0)),
     }
@@ -195,6 +212,10 @@ def aggregate_extractions() -> Dict[str, int]:
                 subtype=normalized["subtype"],
                 summary=normalized["summary"],
                 detail=normalized["detail"],
+                subject_type=normalized["subject_type"],
+                subject_key=normalized["subject_key"],
+                canonical_summary=normalized["canonical_summary"],
+                display_summary=normalized["display_summary"],
                 confidence=normalized["confidence"],
             )
             touched_state_ids.add(state_id)

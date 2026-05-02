@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS states (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category TEXT NOT NULL,       -- 大类：如 dynamic, static
     subtype TEXT,                 -- 小类：如 ongoing_project, preference
+    subject_type TEXT,
+    subject_key TEXT,
+    canonical_summary TEXT,
+    display_summary TEXT,
     summary TEXT NOT NULL,
     detail TEXT,
     status TEXT DEFAULT 'active', -- active, archived

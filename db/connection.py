@@ -19,6 +19,35 @@ from .schema import SCHEMA_SQL
 _connection: Optional[sqlite3.Connection] = None
 logger = get_logger("db")
 
+STATE_COLUMN_MIGRATIONS = (
+    ("subject_type", "TEXT"),
+    ("subject_key", "TEXT"),
+    ("canonical_summary", "TEXT"),
+    ("display_summary", "TEXT"),
+)
+
+
+def _apply_additive_migrations(conn: sqlite3.Connection) -> list[str]:
+    """Apply backward-compatible schema additions for existing databases."""
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(states)").fetchall()
+    }
+    added_columns = []
+
+    for column_name, column_type in STATE_COLUMN_MIGRATIONS:
+        if column_name in columns:
+            continue
+        conn.execute(f"ALTER TABLE states ADD COLUMN {column_name} {column_type}")
+        added_columns.append(f"states.{column_name}")
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_states_identity
+        ON states(subject_type, subject_key, category, subtype, canonical_summary)
+    """)
+
+    return added_columns
+
 
 def get_connection() -> sqlite3.Connection:
     """获取数据库连接（单例）"""
@@ -54,6 +83,7 @@ def init_db(force: bool = False) -> None:
     
     conn = get_connection()
     conn.executescript(SCHEMA_SQL)
+    migrated_columns = _apply_additive_migrations(conn)
     conn.commit()
     log_event(
         logger,
@@ -64,6 +94,7 @@ def init_db(force: bool = False) -> None:
         db_path=DB_PATH,
         force=force,
         removed_existing=removed_existing,
+        migrated_columns=migrated_columns,
         duration_ms=(perf_counter() - start_time) * 1000,
     )
 

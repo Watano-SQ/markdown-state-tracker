@@ -59,6 +59,8 @@ JSON_SCHEMA = """{
   "state_candidates": [
     {
       "summary": "状态摘要（必需）",
+      "canonical_summary": "稳定语义摘要（可选，用于 state identity）",
+      "display_summary": "展示摘要（可选，用于输出文案）",
       "category": "dynamic|static（必需）",
       "subtype": "ongoing_project|recent_event|pending_task|active_interest|preference|background|skill|relationship|other（必需）",
       "detail": "详细信息（可选）",

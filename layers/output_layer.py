@@ -64,7 +64,12 @@ def select_states_for_output() -> Dict[str, List[Dict[str, Any]]]:
             
             # 按 last_updated 倒序取，保证最新的在前
             cursor.execute("""
-                SELECT id, summary, detail, confidence, first_seen, last_updated
+                SELECT id,
+                       COALESCE(display_summary, summary) AS summary,
+                       detail,
+                       confidence,
+                       first_seen,
+                       last_updated
                 FROM states
                 WHERE category = ? AND subtype = ? AND status = 'active'
                 ORDER BY last_updated DESC
