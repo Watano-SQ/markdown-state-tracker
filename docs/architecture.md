@@ -42,6 +42,7 @@
 - [layers/middle_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/middle_layer.py)
   - `ExtractionResult` 相关 dataclass
   - extractions / states / state_evidence / retrieval_candidates / stats
+  - chunk 级 pending 查询与文档完成标记
 - [layers/aggregator.py](/D:/Apps/Python/lab/personal_prompt/layers/aggregator.py)
   - 读取 `extractions`
   - 规范化 `state_candidates`
@@ -107,7 +108,9 @@
   - schema 改动波及面大
   - `python main.py --init` 有破坏性
 - `main.py` 与 `documents.status`
-  - 文档级状态和 chunk 级完成语义还不够稳固
+  - `processed` 只表示该文档当前所有 chunk 都已有 extraction
+  - pending 队列以“chunk 是否缺少 extraction”为恢复依据，会重新纳入旧的过早 processed 文档中的未抽取 chunk
+  - 更完整的失败状态、重试次数和错误持久化仍未设计
 - `input_docs/`
   - 当前包含样例，也可能包含接近真实的个人/项目内容
   - 正式扫描链路不会默认纳入控制文档和测试夹具
@@ -131,8 +134,8 @@
 
 ## 未解决的结构性问题 / 信息缺口
 
-- `documents.status` 的权威状态机没有被明确文档化
-- 失败 chunk 的恢复策略仍未和聚合链路统一起来
+- `documents.status` 只有最小完成语义：所有 chunk 都有 extraction 后才能变为 `processed`
+- 失败 chunk 可通过 pending 队列重新进入抽取，但完整失败状态机、错误持久化与重试策略仍未设计
 - `relation_candidates` / `retrieval_candidates` 仍未接入正式持久化链路
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 仓库没有配置 lint/typecheck/CI 事实源

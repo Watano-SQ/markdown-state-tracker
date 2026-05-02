@@ -179,8 +179,10 @@ def run_extraction(pending_chunks: list, verbose: bool = True) -> dict:
             )
     
     # 标记文档为已处理
+    completed_doc_ids = set()
     for doc_id in processed_doc_ids:
-        mark_document_processed(doc_id)
+        if mark_document_processed(doc_id):
+            completed_doc_ids.add(doc_id)
     
     log_event(
         logger,
@@ -190,7 +192,8 @@ def run_extraction(pending_chunks: list, verbose: bool = True) -> dict:
         stage="extraction",
         extracted=extracted,
         failed=failed,
-        processed_documents=len(processed_doc_ids),
+        processed_documents=len(completed_doc_ids),
+        incomplete_documents=len(processed_doc_ids) - len(completed_doc_ids),
         pending_chunks=len(pending_chunks),
     )
     return {'extracted': extracted, 'failed': failed}

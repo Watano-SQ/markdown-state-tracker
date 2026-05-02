@@ -217,3 +217,21 @@
   - `content_hash` 现在更接近“输入处理指纹”，不再是纯内容 hash
 - Follow-up:
   - 后续若再次调整输入边界或 chunk 语义，需要显式更新输入处理版本并记录到本文件
+
+## 2026-05-02
+
+### 决策
+
+`documents.status = 'processed'` 只表示该文档当前所有 chunk 都已有对应 extraction；pending 队列以 chunk 是否缺少 extraction 为准，而不是完全信任文档级 status。
+
+- Why:
+  - 旧逻辑只要同一文档中任一 chunk 抽取成功，就会把整个文档标为 `processed`
+  - 这会让同文档中抽取失败的 chunk 在后续运行中被文档级 status 排除出 pending 队列
+- Alternatives rejected:
+  - 立刻设计完整 chunk 状态机、失败表、重试次数和错误持久化
+  - 要求用户通过 `python main.py --init` 重建数据库来恢复队列
+- Risk / debt accepted:
+  - 失败原因、重试次数和最终放弃策略仍只存在于日志/运行行为中，没有正式持久化状态机
+  - `documents.status` 仍是粗粒度完成提示，不是完整任务调度状态
+- Follow-up:
+  - 后续若需要完整失败恢复，应补独立 spec，并评估 chunk 级状态、错误持久化和重试上限

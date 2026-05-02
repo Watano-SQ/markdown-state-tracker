@@ -313,7 +313,7 @@ def get_pending_chunks() -> List[Dict[str, Any]]:
                d.path, d.title
         FROM chunks c
         JOIN documents d ON c.document_id = d.id
-        WHERE d.status = 'pending'
+        WHERE d.status IN ('pending', 'processed')
         AND NOT EXISTS (
             SELECT 1 FROM extractions e WHERE e.chunk_id = c.id
         )
@@ -333,11 +333,34 @@ def get_pending_chunks() -> List[Dict[str, Any]]:
     return rows
 
 
-def mark_document_processed(doc_id: int) -> None:
-    """标记文档为已处理"""
+def mark_document_processed(doc_id: int) -> bool:
+    """在文档所有 chunk 都已有 extraction 时标记为已处理。"""
     start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT COUNT(*)
+        FROM chunks c
+        WHERE c.document_id = ?
+          AND NOT EXISTS (
+              SELECT 1 FROM extractions e WHERE e.chunk_id = c.id
+          )
+    """, (doc_id,))
+    pending_chunk_count = cursor.fetchone()[0]
+    if pending_chunk_count:
+        log_event(
+            logger,
+            logging.INFO,
+            "document_processing_incomplete",
+            "Document still has chunks without extraction",
+            stage="db",
+            document_id=doc_id,
+            pending_chunks=pending_chunk_count,
+            duration_ms=(perf_counter() - start_time) * 1000,
+        )
+        return False
+
     cursor.execute(
         "UPDATE documents SET status = 'processed', updated_at = julianday('now') WHERE id = ?",
         (doc_id,)
@@ -352,6 +375,7 @@ def mark_document_processed(doc_id: int) -> None:
         document_id=doc_id,
         duration_ms=(perf_counter() - start_time) * 1000,
     )
+    return True
 
 
 def add_state_evidence(
