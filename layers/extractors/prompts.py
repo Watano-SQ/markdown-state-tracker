@@ -135,8 +135,10 @@ def build_user_prompt(
     context_parts = []
     if context.get('document_title'):
         context_parts.append(f"- 文档标题: {context['document_title']}")
+    if context.get('document_author'):
+        context_parts.append(f"- 文档作者: {context['document_author']}")
     if context.get('document_time'):
-        context_parts.append(f"- 文档时间: {context['document_time']}")
+        context_parts.append(f"- 文档时间: {_format_document_time(context['document_time'])}")
     if context.get('chunk_position'):
         context_parts.append(f"- 文本位置: {context['chunk_position']}")
     if context.get('section'):
@@ -178,3 +180,21 @@ def build_user_prompt(
 2. 如果某类信息不存在，返回空数组 []
 3. 检索候选（retrieval_candidates）用于标记缩写、代称、模糊指代等需要进一步明确的对象
 4. 时间的 source 字段必填，normalized 字段尽量填写（如果能推断出具体或大致时间）"""
+
+
+def _format_document_time(document_time: Any) -> str:
+    """格式化文档时间上下文，避免把 dict 原样塞进 prompt。"""
+    if isinstance(document_time, dict):
+        normalized = document_time.get('normalized')
+        source = document_time.get('source')
+        raw = document_time.get('raw')
+        parts = []
+        if normalized:
+            parts.append(str(normalized))
+        if source:
+            parts.append(f"source={source}")
+        if raw and raw != normalized:
+            parts.append(f"raw={raw}")
+        return " / ".join(parts) if parts else str(document_time)
+
+    return str(document_time)

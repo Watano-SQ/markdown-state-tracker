@@ -24,7 +24,7 @@ from app_logging import get_logger, log_event, setup_logging, shutdown_logging, 
 from config import DEFAULT_LOG_FILE, INPUT_DIR, OUTPUT_FILE
 from db import init_db, close_connection
 from layers.aggregator import aggregate_extractions
-from layers.input_layer import process_input
+from layers.input_layer import build_document_context, process_input
 from layers.middle_layer import get_stats, get_pending_chunks, save_extraction, mark_document_processed
 from layers.output_layer import generate_output
 
@@ -115,7 +115,7 @@ def run_extraction(pending_chunks: list, verbose: bool = True) -> dict:
         try:
             # 准备上下文
             context = {
-                'document_title': chunk.get('title'),
+                **build_document_context(chunk.get('path'), title=chunk.get('title')),
                 'chunk_position': 'middle',  # 简化处理
                 'section': chunk.get('section_label'),
             }

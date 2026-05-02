@@ -9,7 +9,9 @@ from pathlib import Path
 import db.connection as db_connection
 from db import close_connection, init_db
 from layers.input_layer import (
+    build_document_context,
     chunk_document,
+    extract_document_context,
     process_input,
     should_include_document_path,
     split_document_into_source_blocks,
@@ -91,6 +93,58 @@ sudo apt upgrade -y
         self.assertNotIn("您可以先安装依赖", chunks[0].text + chunks[1].text)
         self.assertNotIn("sudo apt update", chunks[0].text + chunks[1].text)
         self.assertNotIn("作者 | 创建时间", chunks[0].text + chunks[1].text)
+
+    def test_extract_document_context_uses_front_matter_and_metadata_table(self) -> None:
+        content = """---
+title: Front Matter Title
+author: Front Matter Author
+created_at: 2025-01-01
+---
+
+| 作者 | 创建时间 | 更新时间 |
+|------|----------|----------|
+| Table Author | 2025-01-02 | 2025-01-03 |
+
+## 复盘
+今天我继续推进项目。
+"""
+
+        context = extract_document_context(content)
+
+        self.assertEqual(context["document_title"], "Front Matter Title")
+        self.assertEqual(context["document_author"], "Front Matter Author")
+        self.assertEqual(
+            context["document_time"],
+            {
+                "normalized": "2025-01-03",
+                "source": "document_context",
+                "raw": "2025-01-03",
+            },
+        )
+
+    def test_build_document_context_reads_current_document_without_chunking_metadata(self) -> None:
+        base_dir = Path(__file__).parent / "data"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(prefix="input_context_", suffix=".md", dir=base_dir)
+        temp_file = Path(temp_path)
+        self.addCleanup(lambda: temp_file.unlink(missing_ok=True))
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(
+                """---
+title: Demo Context
+author: Demo Author
+updated_at: 2025-02-03
+---
+
+我记录一个正文状态。
+"""
+            )
+
+        context = build_document_context(temp_file.name, input_dir=base_dir)
+
+        self.assertEqual(context["document_title"], "Demo Context")
+        self.assertEqual(context["document_author"], "Demo Author")
+        self.assertEqual(context["document_time"]["normalized"], "2025-02-03")
 
     def test_process_input_purges_excluded_documents_from_db(self) -> None:
         conn = db_connection.get_connection()

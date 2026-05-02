@@ -235,3 +235,19 @@
   - `documents.status` 仍是粗粒度完成提示，不是完整任务调度状态
 - Follow-up:
   - 后续若需要完整失败恢复，应补独立 spec，并评估 chunk 级状态、错误持久化和重试上限
+
+### 决策
+
+front matter 与元数据表格继续不进入正文 chunk；当前只从这些非正文块中提炼标题、作者和文档时间，作为 LLM 抽取的轻量文档上下文。
+
+- Why:
+  - 第一阶段需要把非正文块从 state extraction 正文中分离，同时保留少量有价值的文档级解释线索
+  - 现有 extraction schema 已支持 `document_title` 与 `document_time`，prompt 也已有文档上下文区
+- Alternatives rejected:
+  - 把完整 front matter / 元数据表格作为普通 chunk 送入抽取
+  - 立即新增 context-only 块表或完整上下文持久化通道
+- Risk / debt accepted:
+  - 作者字段目前只是抽取上下文提示，不是正式主体归属
+  - 非正文 context-only 块仍没有完整存储、检索或证据模型
+- Follow-up:
+  - 若后续需要消费更多非正文上下文，应先定义最小字段与持久化命运，再扩展输入层

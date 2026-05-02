@@ -36,6 +36,7 @@
   - 扫描
   - 显式样本纳入规则（当前至少排除 `AGENTS.md`、`test_*.md` 与夹具目录）
   - 标题提取
+  - 从 front matter / 元数据表格提炼轻量文档上下文
   - 变更检测
   - 来源类型感知的 chunk 切分
   - documents/chunks 落库
@@ -115,6 +116,10 @@
   - 当前包含样例，也可能包含接近真实的个人/项目内容
   - 正式扫描链路不会默认纳入控制文档和测试夹具
   - 应按潜在敏感数据处理
+- 文档上下文
+  - front matter 与元数据表格不进入正文 chunk
+  - 当前只提炼标题、作者、文档时间作为抽取上下文
+  - 非正文 context-only 块仍没有独立持久化通道
 - `config.py`
   - 导入即创建目录，存在副作用
 
@@ -137,6 +142,7 @@
 - `documents.status` 只有最小完成语义：所有 chunk 都有 extraction 后才能变为 `processed`
 - 失败 chunk 可通过 pending 队列重新进入抽取，但完整失败状态机、错误持久化与重试策略仍未设计
 - `relation_candidates` / `retrieval_candidates` 仍未接入正式持久化链路
+- 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 仓库没有配置 lint/typecheck/CI 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认

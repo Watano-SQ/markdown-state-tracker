@@ -164,6 +164,112 @@ def parse_front_matter(content: str) -> Dict[str, str]:
     return {}
 
 
+def _split_table_row(line: str) -> List[str]:
+    """拆分 Markdown 表格行。"""
+    return [cell.strip() for cell in line.strip().strip('|').split('|')]
+
+
+def _is_table_separator_row(cells: List[str]) -> bool:
+    return bool(cells) and all(re.fullmatch(r':?-{3,}:?', cell.strip()) for cell in cells)
+
+
+def parse_metadata_tables(content: str) -> Dict[str, str]:
+    """从文档中的元数据表格提取简单键值。"""
+    lines = content.splitlines()
+    metadata: Dict[str, str] = {}
+    index = 0
+
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not _is_table_line(stripped):
+            index += 1
+            continue
+
+        table_lines: List[str] = []
+        while index < len(lines) and _is_table_line(lines[index].strip()):
+            table_lines.append(lines[index].strip())
+            index += 1
+
+        table_text = '\n'.join(table_lines)
+        if len(table_lines) < 2 or not _looks_like_metadata_table(table_text):
+            continue
+
+        headers = _split_table_row(table_lines[0])
+        data_start = 1
+        separator_cells = _split_table_row(table_lines[1])
+        if _is_table_separator_row(separator_cells):
+            data_start = 2
+
+        if data_start >= len(table_lines):
+            continue
+
+        values = _split_table_row(table_lines[data_start])
+        for header, value in zip(headers, values):
+            if header and value:
+                metadata[header] = value
+
+    return metadata
+
+
+def extract_document_context(content: str, title: Optional[str] = None) -> Dict[str, Any]:
+    """提炼可传给抽取层的轻量文档上下文。"""
+    front_matter = parse_front_matter(content)
+    table_metadata = parse_metadata_tables(content)
+    metadata = {**table_metadata, **front_matter}
+
+    context: Dict[str, Any] = {}
+    document_title = title or metadata.get('title') or metadata.get('标题')
+    if document_title:
+        context['document_title'] = document_title
+
+    author = metadata.get('author') or metadata.get('作者')
+    if author:
+        context['document_author'] = author
+
+    time_key = next(
+        (
+            key for key in (
+                'updated_at',
+                '更新时间',
+                'created_at',
+                '创建时间',
+                'date',
+                'time',
+                '日期',
+                '时间',
+            )
+            if metadata.get(key)
+        ),
+        None,
+    )
+    if time_key:
+        context['document_time'] = {
+            'normalized': metadata[time_key],
+            'source': 'document_context',
+            'raw': metadata[time_key],
+        }
+
+    return context
+
+
+def build_document_context(relative_path: Optional[str], title: Optional[str] = None, input_dir: Path = INPUT_DIR) -> Dict[str, Any]:
+    """按输入文档路径构建抽取上下文；读取失败时退化为标题上下文。"""
+    context: Dict[str, Any] = {}
+    if title:
+        context['document_title'] = title
+
+    if not relative_path:
+        return context
+
+    try:
+        content = (input_dir / relative_path).read_text(encoding='utf-8')
+    except OSError:
+        return context
+
+    extracted_context = extract_document_context(content, title=title)
+    return {**context, **extracted_context}
+
+
 def extract_title(content: str, filepath: Path) -> str:
     """提取文档标题"""
     front_matter = parse_front_matter(content)
