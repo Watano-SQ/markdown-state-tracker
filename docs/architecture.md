@@ -51,6 +51,7 @@
   - 规范化 `state_candidates`
   - 对显式 unknown 或缺少 subject_key 的主体候选做最小保守拒绝
   - 优先按 `subject_type` / `subject_key` / category / subtype / `canonical_summary` 归并 state
+  - 将 `retrieval_candidates` 写入 pending 候选池，并按 source chunk 保持重复聚合幂等
   - 写入 `states` 与 `state_evidence`
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
   - 选择活跃状态
@@ -145,7 +146,7 @@
 
 - `documents.status` 只有最小完成语义：所有 chunk 都有 extraction 后才能变为 `processed`
 - 失败 chunk 可通过 pending 队列重新进入抽取，但完整失败状态机、错误持久化与重试策略仍未设计
-- `relation_candidates` / `retrieval_candidates` 仍未接入正式持久化链路
+- `retrieval_candidates` 已接入 pending 候选池；`relation_candidates` 仍未接入 pending 持久化链路，也不会直接写入正式 `relations`
 - 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱

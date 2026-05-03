@@ -670,6 +670,8 @@ def add_retrieval_candidate(
     """添加检索候选对象"""
     conn = get_connection()
     cursor = conn.cursor()
+    normalized_source_chunks = _normalize_source_chunk_ids(source_chunk_ids)
+    normalized_priority = _normalize_retrieval_priority(priority)
     
     # 检查是否已存在
     cursor.execute(
@@ -681,27 +683,68 @@ def add_retrieval_candidate(
     if existing:
         # 更新证据计数
         candidate_id = existing['id']
-        old_chunks = json.loads(existing['source_chunk_ids'] or '[]')
-        new_chunks = list(set(old_chunks + (source_chunk_ids or [])))
+        old_chunks = _normalize_source_chunk_ids(
+            json.loads(existing['source_chunk_ids'] or '[]')
+        )
+        new_chunks = sorted(set(old_chunks + normalized_source_chunks))
+        new_evidence_count = len(set(new_chunks) - set(old_chunks))
         
         cursor.execute("""
             UPDATE retrieval_candidates 
-            SET evidence_count = evidence_count + 1,
+            SET evidence_count = evidence_count + ?,
                 source_chunk_ids = ?,
-                priority = MAX(priority, ?)
+                type_guess = COALESCE(type_guess, ?),
+                scope_guess = COALESCE(scope_guess, ?),
+                priority = MIN(priority, ?)
             WHERE id = ?
-        """, (json.dumps(new_chunks), priority, candidate_id))
+        """, (
+            new_evidence_count,
+            json.dumps(new_chunks),
+            type_guess,
+            scope_guess,
+            normalized_priority,
+            candidate_id,
+        ))
     else:
         # 创建新候选
         cursor.execute("""
             INSERT INTO retrieval_candidates 
-            (surface_form, type_guess, scope_guess, source_chunk_ids, priority)
-            VALUES (?, ?, ?, ?, ?)
-        """, (surface_form, type_guess, scope_guess, json.dumps(source_chunk_ids or []), priority))
+            (surface_form, type_guess, scope_guess, evidence_count, source_chunk_ids, priority)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            surface_form,
+            type_guess,
+            scope_guess,
+            max(1, len(normalized_source_chunks)),
+            json.dumps(normalized_source_chunks),
+            normalized_priority,
+        ))
         candidate_id = cursor.lastrowid
     
     conn.commit()
     return candidate_id
+
+
+def _normalize_source_chunk_ids(source_chunk_ids: Optional[List[int]]) -> List[int]:
+    """Return stable unique integer chunk ids."""
+    normalized: List[int] = []
+    for value in source_chunk_ids or []:
+        try:
+            chunk_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if chunk_id not in normalized:
+            normalized.append(chunk_id)
+    return normalized
+
+
+def _normalize_retrieval_priority(priority: Any) -> int:
+    """Clamp retrieval priority to the documented 0-10 range."""
+    try:
+        normalized = int(priority)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(10, normalized))
 
 
 def get_active_states(category: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:

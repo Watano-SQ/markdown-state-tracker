@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app_logging import get_logger, log_event
 from layers.middle_layer import (
     ExtractionResult,
+    add_retrieval_candidate,
     archive_orphan_states,
     ensure_state_evidence,
     get_extractions_for_aggregation,
@@ -148,6 +149,31 @@ def _normalize_state_candidate(candidate: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _normalize_retrieval_candidate(candidate: Any) -> Optional[Dict[str, Any]]:
+    """Normalize RetrievalCandidate for the pending candidate pool."""
+    surface_form = _clean_text(getattr(candidate, "surface_form", None), limit=200)
+    if not surface_form:
+        return None
+
+    return {
+        "surface_form": surface_form,
+        "type_guess": _clean_text(getattr(candidate, "type_guess", None), limit=80),
+        "scope_guess": _clean_text(getattr(candidate, "context", None), limit=200),
+        "priority": _normalize_retrieval_priority(
+            getattr(candidate, "priority", 0)
+        ),
+    }
+
+
+def _normalize_retrieval_priority(value: Any) -> int:
+    """Clamp retrieval priority to the documented 0-10 range."""
+    try:
+        priority = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(10, priority))
+
+
 def aggregate_extractions() -> Dict[str, int]:
     """读取 extractions 并聚合 state_candidates。"""
     stage_start = perf_counter()
@@ -161,6 +187,9 @@ def aggregate_extractions() -> Dict[str, int]:
         "evidence_added": 0,
         "invalid_extractions": 0,
         "skipped_candidates": 0,
+        "retrieval_candidates": 0,
+        "ensured_retrieval_candidates": 0,
+        "skipped_retrieval_candidates": 0,
         "orphan_states_archived": 0,
     }
 
@@ -196,9 +225,6 @@ def aggregate_extractions() -> Dict[str, int]:
             )
             continue
 
-        if not extraction.state_candidates:
-            continue
-
         result["state_candidates"] += len(extraction.state_candidates)
 
         for candidate_index, candidate in enumerate(extraction.state_candidates):
@@ -232,6 +258,22 @@ def aggregate_extractions() -> Dict[str, int]:
             if created:
                 result["evidence_added"] += 1
 
+        result["retrieval_candidates"] += len(extraction.retrieval_candidates)
+        for candidate in extraction.retrieval_candidates:
+            normalized_retrieval = _normalize_retrieval_candidate(candidate)
+            if normalized_retrieval is None:
+                result["skipped_retrieval_candidates"] += 1
+                continue
+
+            add_retrieval_candidate(
+                surface_form=normalized_retrieval["surface_form"],
+                type_guess=normalized_retrieval["type_guess"],
+                scope_guess=normalized_retrieval["scope_guess"],
+                source_chunk_ids=[row["chunk_id"]],
+                priority=normalized_retrieval["priority"],
+            )
+            result["ensured_retrieval_candidates"] += 1
+
     result["touched_states"] = len(touched_state_ids)
     result["orphan_states_archived"] = archive_orphan_states()
 
@@ -249,6 +291,9 @@ def aggregate_extractions() -> Dict[str, int]:
         evidence_added=result["evidence_added"],
         invalid_extractions=result["invalid_extractions"],
         skipped_candidates=result["skipped_candidates"],
+        retrieval_candidates=result["retrieval_candidates"],
+        ensured_retrieval_candidates=result["ensured_retrieval_candidates"],
+        skipped_retrieval_candidates=result["skipped_retrieval_candidates"],
         orphan_states_archived=result["orphan_states_archived"],
     )
     return result

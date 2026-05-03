@@ -16,10 +16,10 @@
 目前仍未完全解决：
 
 - 部分 chunk 抽取失败后的完整状态流转
-- `relation_candidates` / `retrieval_candidates` 的正式落库
+- `relation_candidates` 的 pending 持久化与正式关系晋升
 - 更强的 LLM 脏响应健壮性
 
-因此，当前仓库已经可以基于已有 `extractions` 生成非空状态输出；但增量恢复和关系类数据仍不是完整实现。
+因此，当前仓库已经可以基于已有 `extractions` 生成非空状态输出，并会把 `retrieval_candidates` 写入 pending 候选池；但增量恢复和关系类数据仍不是完整实现。
 
 ## 推荐环境
 

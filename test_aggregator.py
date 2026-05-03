@@ -10,7 +10,7 @@ from pathlib import Path
 import db.connection as db_connection
 from db import close_connection, init_db
 from layers.aggregator import aggregate_extractions
-from layers.middle_layer import ExtractionResult, StateCandidate
+from layers.middle_layer import ExtractionResult, RetrievalCandidate, StateCandidate
 
 
 class AggregatorTests(unittest.TestCase):
@@ -35,7 +35,7 @@ class AggregatorTests(unittest.TestCase):
     def seed_extraction(
         self,
         *,
-        summary: str,
+        summary: str | None,
         category: str = "dynamic",
         subtype: str = "ongoing_project",
         detail: str | None = None,
@@ -44,6 +44,7 @@ class AggregatorTests(unittest.TestCase):
         subject_key: str | None = None,
         canonical_summary: str | None = None,
         display_summary: str | None = None,
+        retrieval_candidates: list[RetrievalCandidate] | None = None,
     ) -> tuple[int, int]:
         conn = db_connection.get_connection()
         cursor = conn.cursor()
@@ -73,8 +74,9 @@ class AggregatorTests(unittest.TestCase):
         )
         chunk_id = cursor.lastrowid
 
-        extraction = ExtractionResult(
-            state_candidates=[
+        state_candidates = []
+        if summary is not None:
+            state_candidates = [
                 StateCandidate(
                     summary=summary,
                     canonical_summary=canonical_summary,
@@ -87,6 +89,9 @@ class AggregatorTests(unittest.TestCase):
                     subject_key=subject_key,
                 )
             ]
+        extraction = ExtractionResult(
+            state_candidates=state_candidates,
+            retrieval_candidates=retrieval_candidates or [],
         )
         cursor.execute(
             """
@@ -148,6 +153,77 @@ class AggregatorTests(unittest.TestCase):
         self.assertEqual(second["evidence_added"], 0)
         self.assertEqual(state_count, 1)
         self.assertEqual(evidence_count, 1)
+
+    def test_aggregate_extractions_persists_retrieval_candidates(self) -> None:
+        chunk_id, _ = self.seed_extraction(
+            summary=None,
+            retrieval_candidates=[
+                RetrievalCandidate(
+                    surface_form="  GPT  ",
+                    type_guess="tool",
+                    context="ambiguous model reference",
+                    priority=15,
+                ),
+                RetrievalCandidate(surface_form=" "),
+            ],
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        row = conn.execute(
+            """
+            SELECT surface_form, type_guess, scope_guess, evidence_count,
+                   decision_status, priority, source_chunk_ids
+            FROM retrieval_candidates
+            """
+        ).fetchone()
+
+        self.assertEqual(result["retrieval_candidates"], 2)
+        self.assertEqual(result["ensured_retrieval_candidates"], 1)
+        self.assertEqual(result["skipped_retrieval_candidates"], 1)
+        self.assertEqual(row["surface_form"], "GPT")
+        self.assertEqual(row["type_guess"], "tool")
+        self.assertEqual(row["scope_guess"], "ambiguous model reference")
+        self.assertEqual(row["evidence_count"], 1)
+        self.assertEqual(row["decision_status"], "pending")
+        self.assertEqual(row["priority"], 10)
+        self.assertEqual(json.loads(row["source_chunk_ids"]), [chunk_id])
+
+    def test_aggregate_extractions_keeps_retrieval_candidates_idempotent(self) -> None:
+        chunk_id, _ = self.seed_extraction(
+            summary=None,
+            retrieval_candidates=[
+                RetrievalCandidate(
+                    surface_form="Project X",
+                    type_guess="project",
+                    priority=-5,
+                )
+            ],
+        )
+
+        first = aggregate_extractions()
+        second = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        row = conn.execute(
+            """
+            SELECT evidence_count, priority, source_chunk_ids
+            FROM retrieval_candidates
+            WHERE surface_form = ?
+            """,
+            ("Project X",),
+        ).fetchone()
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM retrieval_candidates"
+        ).fetchone()[0]
+
+        self.assertEqual(first["ensured_retrieval_candidates"], 1)
+        self.assertEqual(second["ensured_retrieval_candidates"], 1)
+        self.assertEqual(candidate_count, 1)
+        self.assertEqual(row["evidence_count"], 1)
+        self.assertEqual(row["priority"], 0)
+        self.assertEqual(json.loads(row["source_chunk_ids"]), [chunk_id])
 
     def test_aggregate_extractions_merges_same_subject_and_canonical_summary(self) -> None:
         self.seed_extraction(
