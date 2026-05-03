@@ -1,5 +1,43 @@
 # 变更与决策
 
+## 2026-05-02
+
+### 决策
+
+`relation_candidates` / `retrieval_candidates` 后续采用“候选暂存 + 裁决层”方案，而不是默认直接升格为正式关系或检索结果。
+
+- Why:
+  - 抽取 schema 与数据库已经存在关系/检索候选相关结构，但主链路尚未消费这些字段
+  - `RelationCandidate` 的 source/target 仍是自然语言文本，不能可靠满足正式 `relations` 所需的 source/target id
+  - 检索候选可以先进入 pending 候选池，但必须保证重复聚合幂等
+- Alternatives rejected:
+  - 继续完全忽略 relation/retrieval candidates，让它们只留在 `extraction_json` 中
+  - 直接把自由文本 relation candidates 写入正式 `relations`
+  - 在当前阶段引入完整关系图谱、外部检索或实体 registry
+- Risk / debt accepted:
+  - relation candidates 需要新增 pending 持久化层或等价候选观察记录
+  - 正式 relation 晋升仍依赖后续主体归属与统一状态底座成熟
+- Follow-up:
+  - 按 `docs/specs/relation_retrieval_candidates.md` 与 `docs/plans/relation_retrieval_candidates.md` 逐步实施
+
+### 决策
+
+场景化输出采用“单 profile 选择机制 + profile-aware 输出策略”，并先以 `default` profile 兼容现有 `output/status.md`。
+
+- Why:
+  - 当前输出层仍是固定 `status.md`、固定分组和固定 Markdown 骨架
+  - profile 机制应支持个人复盘、团队同步、项目推进等场景，但不应一次性生成多文件矩阵
+  - 在主体归属和统一状态底座成熟前，真实场景化策略只能渐进实现
+- Alternatives rejected:
+  - 继续把 `output/status.md` 当作唯一正式目标
+  - 一次运行生成个人、团队、项目等多套并行输出文件
+  - 在缺少 subject/canonical 底座时抢跑完整场景筛选
+- Risk / debt accepted:
+  - 初始 default profile 壳层短期内主要是结构迁移，用户可见差异有限
+  - personal/team/project profile 的真实筛选依赖后续主体归属与统一状态底座
+- Follow-up:
+  - 先按 `docs/specs/state_output_profiles.md` 与 `docs/plans/state_output_profiles.md` 落地 default profile 兼容壳层，再增加单 profile 选择入口
+
 ## 2026-04-15
 
 ### 决策
