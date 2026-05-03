@@ -55,8 +55,9 @@
   - 写入 `states` 与 `state_evidence`
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
   - 选择活跃状态
+  - 通过当前唯一的 `default` 输出 profile 包装现有输出配置
   - 生成 Markdown
-  - 保存输出快照
+  - 保存 `output/status.md` 兼容输出和输出快照
 - [layers/extractors/config.py](/D:/Apps/Python/lab/personal_prompt/layers/extractors/config.py)
   - `.env` 读取
   - 抽取器配置

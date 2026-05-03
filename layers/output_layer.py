@@ -2,8 +2,9 @@
 输出层：状态文档生成
 """
 import json
+from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from pathlib import Path
 import logging
 from time import perf_counter
@@ -45,7 +46,33 @@ OUTPUT_CONFIG = {
 }
 
 
-def select_states_for_output() -> Dict[str, List[Dict[str, Any]]]:
+DEFAULT_PROFILE_NAME = "default"
+
+
+@dataclass(frozen=True)
+class OutputProfile:
+    name: str
+    config: Dict[str, Dict[str, Any]]
+    output_path: Path
+
+
+OUTPUT_PROFILES = {
+    DEFAULT_PROFILE_NAME: OutputProfile(
+        name=DEFAULT_PROFILE_NAME,
+        config=OUTPUT_CONFIG,
+        output_path=OUTPUT_FILE,
+    ),
+}
+
+
+def get_output_profile(profile_name: str = DEFAULT_PROFILE_NAME) -> OutputProfile:
+    try:
+        return OUTPUT_PROFILES[profile_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown output profile: {profile_name}") from exc
+
+
+def select_states_for_output(profile: Optional[OutputProfile] = None) -> Dict[str, Any]:
     """从中间层选择要输出的状态项
     
     这里实现"按需选取"逻辑，不是把整个中间层塞给输出
@@ -55,8 +82,9 @@ def select_states_for_output() -> Dict[str, List[Dict[str, Any]]]:
     cursor = conn.cursor()
     
     result = {}
+    profile = profile or get_output_profile()
     
-    for category, config in OUTPUT_CONFIG.items():
+    for category, config in profile.config.items():
         result[category] = {}
         
         for subtype, subtype_label in config['subtypes'].items():
@@ -113,9 +141,13 @@ def format_julian_date(julian_day: Optional[float]) -> str:
         return "未知"
 
 
-def generate_status_document(selected_states: Dict[str, Any]) -> str:
+def generate_status_document(
+    selected_states: Dict[str, Any],
+    profile: Optional[OutputProfile] = None,
+) -> str:
     """生成状态文档 Markdown"""
     lines = []
+    profile = profile or get_output_profile()
     
     # 头部
     lines.append("# 状态文档")
@@ -126,7 +158,7 @@ def generate_status_document(selected_states: Dict[str, Any]) -> str:
     lines.append("")
     
     # 按大类输出
-    for category, config in OUTPUT_CONFIG.items():
+    for category, config in profile.config.items():
         category_data = selected_states.get(category, {})
         
         lines.append(f"## {config['title']}")
@@ -219,21 +251,26 @@ def save_output(content: str, output_path: Path = OUTPUT_FILE) -> int:
     return snapshot_id
 
 
-def generate_output() -> Dict[str, Any]:
+def generate_output(
+    profile_name: str = DEFAULT_PROFILE_NAME,
+    output_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     """输出层主流程：选择 → 生成 → 保存
     
     Returns:
         处理结果信息
     """
     stage_start = perf_counter()
+    profile = get_output_profile(profile_name)
     # 1. 从中间层选择状态
-    selected = select_states_for_output()
+    selected = select_states_for_output(profile)
     
     # 2. 生成文档
-    content = generate_status_document(selected)
+    content = generate_status_document(selected, profile)
     
     # 3. 保存
-    snapshot_id = save_output(content)
+    selected_output_path = output_path or profile.output_path
+    snapshot_id = save_output(content, selected_output_path)
     
     # 统计
     total_items = 0
@@ -242,8 +279,9 @@ def generate_output() -> Dict[str, Any]:
             total_items += len(sub_data['items'])
     
     result = {
+        'profile': profile.name,
         'snapshot_id': snapshot_id,
-        'output_path': str(OUTPUT_FILE),
+        'output_path': str(selected_output_path),
         'total_items': total_items,
         'content_length': len(content)
     }
@@ -254,7 +292,7 @@ def generate_output() -> Dict[str, Any]:
         "Completed output generation",
         stage="output",
         snapshot_id=snapshot_id,
-        output_path=OUTPUT_FILE,
+        output_path=selected_output_path,
         total_items=total_items,
         duration_ms=(perf_counter() - stage_start) * 1000,
     )

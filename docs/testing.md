@@ -28,6 +28,7 @@ python -m unittest test_input_layer.py
 python test_extraction_schema.py
 python -m unittest test_aggregator.py
 python -m unittest test_middle_layer.py
+python -m unittest test_output_layer.py
 python -m unittest test_logging.py
 python test_font_filtering.py
 python main.py --skip-extraction
