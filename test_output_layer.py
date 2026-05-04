@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 
 import db.connection as db_connection
 from db import close_connection, init_db
@@ -124,8 +125,8 @@ class OutputLayerProfileTests(unittest.TestCase):
         self,
         summary: str,
         subtype: str = "ongoing_project",
-        subject_type: str = "project",
-        subject_key: str = "project-alpha",
+        subject_type: Optional[str] = "project",
+        subject_key: Optional[str] = "project-alpha",
         detail: str = "Seeded contextual output state.",
     ) -> int:
         conn = db_connection.get_connection()
@@ -180,13 +181,14 @@ class OutputLayerProfileTests(unittest.TestCase):
 
         self.assertEqual(result["profile"], DEFAULT_PROFILE_NAME)
         self.assertEqual(result["output_path"], str(output_path))
-        self.assertEqual(result["total_items"], 1)
+        self.assertEqual(result["total_items"], 0)
+        self.assertEqual(result["needs_context_items"], 1)
         self.assertTrue(output_path.exists())
-        self.assertIn(
-            "Alice is validating the default output profile",
-            output_path.read_text(encoding="utf-8"),
-        )
-        self.assertIn("## 上下文报告", output_path.read_text(encoding="utf-8"))
+        content = output_path.read_text(encoding="utf-8")
+        self.assertIn("## 上下文报告", content)
+        self.assertIn("*暂无可靠上下文*", content)
+        self.assertNotIn("Alice is validating the default output profile", content)
+        self.assertNotIn("## 待澄清", content)
 
     def test_generate_output_accepts_explicit_default_profile(self) -> None:
         output_path = self.make_output_path("-explicit.md")
@@ -197,7 +199,8 @@ class OutputLayerProfileTests(unittest.TestCase):
         )
 
         self.assertEqual(result["profile"], DEFAULT_PROFILE_NAME)
-        self.assertEqual(result["total_items"], 1)
+        self.assertEqual(result["total_items"], 0)
+        self.assertEqual(result["needs_context_items"], 1)
         self.assertTrue(output_path.exists())
 
     def test_unknown_output_profile_fails_clearly(self) -> None:
@@ -286,6 +289,127 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertNotIn(self.orphan_state_id, bundled_state_ids)
         self.assertEqual(needs_context[self.orphan_state_id], "missing_evidence")
 
+    def test_context_bundles_merge_distant_chunks_with_strong_anchor(self) -> None:
+        document_id = self.insert_document("input_docs/issue-alpha.md", "Issue Alpha")
+        first_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "The team starts investigating issue #1260.",
+            section_label="Start",
+        )
+        anchor_chunk_id = self.insert_chunk(
+            document_id,
+            5,
+            "Later notes also mention issue #1260 as the same thread.",
+            section_label="Middle",
+        )
+        final_chunk_id = self.insert_chunk(
+            document_id,
+            10,
+            "The end of the document returns to issue #1260.",
+            section_label="End",
+        )
+        first_state_id = self.insert_state(
+            "Investigate issue #1260",
+            subtype="recent_event",
+            subject_type=None,
+            subject_key=None,
+        )
+        final_state_id = self.insert_state(
+            "Issue #1260 still needs follow-up",
+            subtype="pending_task",
+            subject_type=None,
+            subject_key=None,
+        )
+        self.insert_evidence(first_state_id, first_chunk_id)
+        self.insert_evidence(final_state_id, final_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        matching_bundles = [
+            bundle
+            for bundle in selection.bundles
+            if set(bundle.state_ids) == {first_state_id, final_state_id}
+        ]
+        self.assertEqual(len(matching_bundles), 1)
+        bundle = matching_bundles[0]
+        self.assertEqual(
+            bundle.evidence_chunk_ids,
+            [first_chunk_id, anchor_chunk_id, final_chunk_id],
+        )
+        self.assertIn("same_document_strong_anchor_context", bundle.merge_basis)
+        self.assertTrue(
+            any(
+                basis.startswith("distant_strong_anchor:")
+                for basis in bundle.merge_basis
+            )
+        )
+
+    def test_context_bundles_do_not_merge_distant_chunks_without_anchor(self) -> None:
+        document_id = self.insert_document("input_docs/no-anchor.md", "No Anchor")
+        first_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "The first note is local and generic.",
+            section_label="Start",
+        )
+        second_chunk_id = self.insert_chunk(
+            document_id,
+            10,
+            "The final note is separate and generic.",
+            section_label="End",
+        )
+        first_state_id = self.insert_state(
+            "First generic note",
+            subject_type=None,
+            subject_key=None,
+        )
+        second_state_id = self.insert_state(
+            "Second generic note",
+            subject_type=None,
+            subject_key=None,
+        )
+        self.insert_evidence(first_state_id, first_chunk_id)
+        self.insert_evidence(second_state_id, second_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        merged_state_sets = [set(bundle.state_ids) for bundle in selection.bundles]
+        needs_context_ids = {item.state_id for item in selection.needs_context_items}
+        self.assertNotIn({first_state_id, second_state_id}, merged_state_sets)
+        self.assertTrue({first_state_id, second_state_id}.issubset(needs_context_ids))
+
+    def test_context_bundles_complete_single_state_with_neighbor_chunk(self) -> None:
+        document_id = self.insert_document("input_docs/neighbor.md", "Neighbor")
+        source_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "A source state appears here.",
+            section_label="Local",
+        )
+        neighbor_chunk_id = self.insert_chunk(
+            document_id,
+            1,
+            "The adjacent chunk supplies local context.",
+            section_label="Local",
+        )
+        state_id = self.insert_state(
+            "Use local chunk context",
+            subject_type=None,
+            subject_key=None,
+        )
+        self.insert_evidence(state_id, source_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        matching_bundles = [
+            bundle for bundle in selection.bundles if bundle.state_ids == [state_id]
+        ]
+        self.assertEqual(len(matching_bundles), 1)
+        bundle = matching_bundles[0]
+        self.assertEqual(bundle.evidence_chunk_ids, [source_chunk_id, neighbor_chunk_id])
+        self.assertIn("neighbor_chunk_context", bundle.merge_basis)
+
     def test_generate_output_renders_contextual_bundle_sections(self) -> None:
         document_id = self.insert_document("input_docs/render-alpha.md", "Render Alpha")
         first_chunk_id = self.insert_chunk(
@@ -313,12 +437,14 @@ class OutputLayerProfileTests(unittest.TestCase):
         result = generate_output(output_path=output_path)
         content = output_path.read_text(encoding="utf-8")
 
-        self.assertEqual(result["total_items"], 3)
+        self.assertEqual(result["total_items"], 2)
+        self.assertEqual(result["needs_context_items"], 1)
+        self.assertEqual(result["diagnostics"]["bundle_count"], 1)
         self.assertIn("## 上下文报告", content)
         self.assertIn("### Render Alpha", content)
         self.assertIn("#### 进展", content)
         self.assertIn("#### 下一步", content)
-        self.assertIn("## 待澄清", content)
+        self.assertNotIn("## 待澄清", content)
 
 
 if __name__ == "__main__":

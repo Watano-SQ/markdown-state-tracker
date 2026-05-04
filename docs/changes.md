@@ -14,7 +14,7 @@
   - 过滤掉上下文不足的条目也不够好；它们应先尝试沿 `state_evidence` 回到 source chunk / document 归入上下文整体
   - 现有 `states`、`state_evidence`、`retrieval_candidates` 与 `OutputProfile` 已支持先在输出层验证只读上下文投影
 - Decision:
-  - 新增 `docs/specs/contextual_output_bundles.md` 和 `docs/plans/contextual_output_bundles.md`
+  - 新增 `docs/specs/contextual_output_bundles.md` 和 `docs/plans/contextual_output_bundles.md` 作为当时的 v1 设计文档；当前已归档到 `docs/archive/specs/contextual_output_bundles.md` 与 `docs/archive/plans/contextual_output_bundles.md`
   - v1 的 `ContextBundle` 是 output layer 内存结构，不新增 SQLite 表
   - bundle 构造优先使用同文档、相邻 chunk、同 section、共享主体和 canonical/display 语义线索
   - `status.md` 后续主输出应从分类清单转为上下文报告，推荐小节包括当前目标、进展、问题、下一步和相关线索
@@ -39,6 +39,65 @@
   - v2 再引入 profile 级完整性提示和更明确的 `needs_context` 输出策略
   - v3 评估持久化 `context_bundles` / `context_bundle_evidence`
   - v4 在隐私、成本、可重复测试都可接受时，再评估 LLM 辅助 bundle 标题和摘要生成
+
+### 决策
+
+下一阶段先强化不规范文档的上下文发现流程，而不是设置输出数量阈值或把 `needs_context` 渲染进 `status.md`。
+
+- Why:
+  - 文档开头和结尾可能讨论同一事件，只靠相邻 chunk 会漏掉远距离上下文
+  - 上下文不足的 state 应先使用当前可用的本地上下文，而不是直接进入正式输出
+  - `待澄清` 章节会把内部诊断噪音暴露给最终读者
+  - 尚未观察真实 bundle 分布前，提前设置 max bundle / max item 阈值会过早优化
+- Decision:
+  - 新增 `docs/specs/contextual_bundle_discovery.md` 和 `docs/plans/contextual_bundle_discovery.md` 作为下一阶段计划，不覆盖已实现的 `contextual_output_bundles` v1 文档
+  - `status.md` 只输出已形成可靠上下文的 bundle
+  - `needs_context` 保持为内部诊断 / 补全流程，不作为正式 Markdown 章节
+  - bundle 归组分为局部归组和同文档远距离强锚点回收
+  - 对上下文不足的 state，本阶段先使用 source evidence chunk、邻近 chunk、同文档其他 chunk
+  - 白名单补充材料只在显式可用时接入；完整补全链路记录为后续版本方向
+  - 暂不设置输出数量阈值，先记录 bundle 数量、state 分布、合并依据、未归组数量和原因
+- Implemented:
+  - `layers/output_layer.py` 将 `needs_context` 从正式 Markdown 渲染中移除，只保留为返回值和诊断数据
+  - bundle 构造先做局部相邻 / shared section 归组，再用同文档强锚点回收远距离候选组
+  - 单条 state 可通过邻近 chunk 或同文档强锚点 chunk 补足本地上下文形成可靠 bundle
+  - 诊断返回 bundle 数、每个 bundle 的 state 数、合并依据、未归组数量和原因，以及疑似过大 bundle
+  - `test_output_layer.py` 覆盖远距离强锚点合并、远距离无锚点不误合并、邻近 chunk 补全和 `needs_context` 不渲染
+- Alternatives rejected:
+  - 继续只依赖相邻 chunk 归组
+  - 在 `status.md` 中正式渲染 `待澄清`
+  - 未观察真实分布前先设置输出数量阈值
+  - 要求本阶段一次走完整补全链路
+  - 在本阶段引入 retrieval / MCP / 联网搜索作为默认补全路径
+- Risk / debt accepted:
+  - 远距离强锚点回收仍可能出现误合并，需要诊断信息辅助观察
+  - 当前可用本地路径可能仍无法解决所有碎片状态，失败项会暂不输出
+  - 白名单补充材料和外部补全的目录、准入、隐私与可靠性策略留到后续版本评估
+- Follow-up:
+  - 实现后先观察真实 bundle 分布，再决定 max bundle、max item、bundle 拆分或 needs_context 持久化策略
+  - 后续版本再评估完整补全链路：白名单补充材料、retrieval、MCP、联网搜索
+
+### 决策
+
+`docs/specs/` 与 `docs/plans/` 只保留当前活跃任务和模板；已被取代的 spec/plan 移入 `docs/archive/specs/` 与 `docs/archive/plans/`。
+
+- Why:
+  - 多个阶段 spec/plan 同时留在活跃目录，会让实现对话难以判断当前任务边界
+  - `contextual_bundle_discovery` 已成为当前唯一活跃 spec/plan，旧阶段文档应保留历史价值但退出活跃事实源
+  - 归档机制能避免“已实现 v1”“下一阶段计划”和历史阶段设计互相覆盖
+- Decision:
+  - 当前活跃 spec/plan 为 `docs/specs/contextual_bundle_discovery.md` 与 `docs/plans/contextual_bundle_discovery.md`
+  - `docs/specs/_template.md` 与 `docs/plans/_template.md` 继续保留为模板
+  - 其他 spec/plan 迁移到 `docs/archive/specs/` 与 `docs/archive/plans/`
+  - 新阶段若取代当前活跃 spec/plan，应在同一变更中归档旧 pair，并在本文件记录 supersession
+- Alternatives rejected:
+  - 继续让所有历史 spec/plan 留在活跃目录
+  - 删除历史 spec/plan
+  - 只靠文件名或提交历史判断当前任务
+- Risk / debt accepted:
+  - 历史 `docs/changes.md` 条目可能仍引用当时的旧路径；新决策应优先引用 archive 路径或当前活跃路径
+- Follow-up:
+  - 后续新增 spec/plan 时同步更新 `AGENTS.md`、`docs/architecture.md` 和必要的入口文档
 
 ## 2026-05-03
 
@@ -109,7 +168,7 @@
   - relation candidates 需要新增 pending 持久化层或等价候选观察记录
   - 正式 relation 晋升仍依赖后续主体归属与统一状态底座成熟
 - Follow-up:
-  - 按 `docs/specs/relation_retrieval_candidates.md` 与 `docs/plans/relation_retrieval_candidates.md` 逐步实施
+  - 历史设计见 `docs/archive/specs/relation_retrieval_candidates.md` 与 `docs/archive/plans/relation_retrieval_candidates.md`
 
 ### 决策
 
@@ -127,7 +186,7 @@
   - 初始 default profile 壳层短期内主要是结构迁移，用户可见差异有限
   - personal/team/project profile 的真实筛选依赖后续主体归属与统一状态底座
 - Follow-up:
-  - 先按 `docs/specs/state_output_profiles.md` 与 `docs/plans/state_output_profiles.md` 落地 default profile 兼容壳层，再增加单 profile 选择入口
+  - 历史设计见 `docs/archive/specs/state_output_profiles.md` 与 `docs/archive/plans/state_output_profiles.md`
 
 ## 2026-04-15
 

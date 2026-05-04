@@ -13,7 +13,7 @@
 5. 聚合 `state_candidates -> states/state_evidence`
 6. 从数据库生成输出 Markdown
 
-注意：基础聚合链路现已接入主流程，但相关状态管理仍不完整；尤其是失败 chunk 的恢复、关系落库、检索候选落库仍未打通。
+注意：基础聚合链路现已接入主流程，失败 chunk 可通过 pending 队列重新纳入，`retrieval_candidates` 也已进入 pending 候选池；但完整失败状态机、关系持久化、retrieval 裁决/完整生命周期仍未完成。
 
 ## 主要模块与职责
 
@@ -57,9 +57,16 @@
   - 选择活跃状态
   - 通过当前唯一的 `default` 输出 profile 包装现有输出配置
   - 通过 `state_evidence -> chunks -> documents` 构造只读 `ContextBundle` 输出投影
+  - 使用局部相邻证据和同文档远距离强锚点回收发现上下文 bundle
   - 生成以上下文 bundle 为主阅读单位的 Markdown
-  - 将缺少足够证据或上下文的状态降级到待澄清区域
+  - 将缺少足够证据或上下文的状态保留为内部诊断，不渲染进正式 Markdown
   - 保存 `output/status.md` 兼容输出和输出快照
+- 当前活跃 spec/plan：
+  - [docs/specs/contextual_bundle_discovery.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/contextual_bundle_discovery.md)
+  - [docs/plans/contextual_bundle_discovery.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/contextual_bundle_discovery.md)
+- 归档规则：
+  - `docs/specs/` 与 `docs/plans/` 只保留当前活跃任务和 `_template.md`
+  - 已被取代的 spec/plan 移入 `docs/archive/specs/` 与 `docs/archive/plans/`
 - [layers/extractors/config.py](/D:/Apps/Python/lab/personal_prompt/layers/extractors/config.py)
   - `.env` 读取
   - 抽取器配置
@@ -153,7 +160,8 @@
 - 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱
-- `ContextBundle` 当前只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section 与主体线索等保守启发式
+- `ContextBundle` 当前只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式
+- 未归组 state 当前只进入输出层返回值和日志诊断，不作为 `status.md` 的正式 `待澄清` 章节展示
 - 仓库没有配置 lint/typecheck/CI 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认
 - 保留文档之间若出现冲突，当前默认以代码和本文件为准；更正式的权威顺序仍需要人类确认

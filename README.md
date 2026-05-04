@@ -11,7 +11,7 @@
 - 可选的 LLM 抽取
 - `state_candidates -> states` 的基础聚合链路
 - 文件日志
-- 固定骨架的输出文档生成
+- `default` 输出 profile 生成以 `ContextBundle` 为主阅读单位的 `output/status.md`
 
 目前仍未完全解决：
 
@@ -90,6 +90,8 @@ python main.py --init
 - `data/state.db`：数据库
 - `data/logs/pipeline.log`：日志
 - `output/status.md`：输出文档
+- `docs/specs/contextual_bundle_discovery.md` 与 `docs/plans/contextual_bundle_discovery.md`：当前活跃 spec/plan
+- `docs/archive/specs/` 与 `docs/archive/plans/`：已归档的历史 spec/plan
 
 ## 继续阅读
 

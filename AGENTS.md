@@ -13,7 +13,7 @@ Current code path:
 5. Aggregate `state_candidates` into `states`
 6. Generate `output/status.md`
 
-Important current-state note: the repository now has a basic aggregation path from `state_candidates` into populated `states` for output, but related gaps still remain. Do not describe failed-chunk recovery, relation persistence, or retrieval persistence as already solved.
+Important current-state note: the repository now has a basic aggregation path from `state_candidates` into populated `states` for output. It also has minimal pending chunk recovery and a pending `retrieval_candidates` pool. Do not describe the full failed-chunk state machine, relation persistence, or full retrieval lifecycle/candidate adjudication as solved.
 
 ## Required Checks
 
@@ -46,6 +46,8 @@ There is no repository-configured lint, typecheck, or CI command to claim by def
 - [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)
 - [docs/specs/_template.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/_template.md)
 - [docs/plans/_template.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/_template.md)
+- [docs/specs/contextual_bundle_discovery.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/contextual_bundle_discovery.md)
+- [docs/plans/contextual_bundle_discovery.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/contextual_bundle_discovery.md)
 - [docs/changes.md](/D:/Apps/Python/lab/personal_prompt/docs/changes.md)
 - [.github/CONTRIBUTING.md](/D:/Apps/Python/lab/personal_prompt/.github/CONTRIBUTING.md)
 - [.github/EXTRACTION_JSON_SCHEMA.md](/D:/Apps/Python/lab/personal_prompt/.github/EXTRACTION_JSON_SCHEMA.md)
@@ -65,6 +67,8 @@ There is no repository-configured lint, typecheck, or CI command to claim by def
 - Use retained docs as the active source of truth. Use `docs/archive/` only for historical context.
 - When a task changes commands, file layout, module boundaries, schema, or long-lived workflow rules, update the matching retained docs.
 - Do not expand root documentation with task-specific plans; put task intent in `docs/specs/` and execution detail in `docs/plans/`.
+- Keep only the current active implementation pair in `docs/specs/` and `docs/plans/` alongside `_template.md`; move superseded specs/plans to `docs/archive/specs/` and `docs/archive/plans/`.
+- If a new spec/plan supersedes the active pair, archive the old pair in the same change and record the supersession in `docs/changes.md`.
 
 ## Documentation Sync Rule
 
@@ -73,6 +77,7 @@ After any non-trivial task, explicitly evaluate whether these files need updates
 - `AGENTS.md`
 - relevant `docs/specs/*.md`
 - relevant `docs/plans/*.md`
+- relevant `docs/archive/specs/*.md` or `docs/archive/plans/*.md` when archiving or referencing superseded plans
 - `docs/changes.md`
 - `docs/architecture.md`
 
