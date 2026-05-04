@@ -1,6 +1,46 @@
 # 变更与决策
+>本文档应当按照日期倒序来写，也即最新日期在前。
+
 
 ## 2026-05-04
+
+### 决策
+
+后续输出单位从碎片 `state` 条目转向证据驱动的上下文 `ContextBundle`，先在 output/profile 层做只读投影，而不是新增持久化 schema 或继续美化单条状态。
+
+- Why:
+  - 当前 `status.md` 把许多离开上下文就失效的碎片状态当作独立状态输出，容易制造信息噪音
+  - 给每条碎片状态单独补背景会造成重复、臃肿，并诱导系统硬补不确定上下文
+  - 过滤掉上下文不足的条目也不够好；它们应先尝试沿 `state_evidence` 回到 source chunk / document 归入上下文整体
+  - 现有 `states`、`state_evidence`、`retrieval_candidates` 与 `OutputProfile` 已支持先在输出层验证只读上下文投影
+- Decision:
+  - 新增 `docs/specs/contextual_output_bundles.md` 和 `docs/plans/contextual_output_bundles.md`
+  - v1 的 `ContextBundle` 是 output layer 内存结构，不新增 SQLite 表
+  - bundle 构造优先使用同文档、相邻 chunk、同 section、共享主体和 canonical/display 语义线索
+  - `status.md` 后续主输出应从分类清单转为上下文报告，推荐小节包括当前目标、进展、问题、下一步和相关线索
+  - 无法归入可靠上下文的 state 降级为待澄清或暂不展示，不再混入主清单
+- Implemented:
+  - `layers/output_layer.py` 新增 `ContextBundle` / `ContextBundleSelection` 只读投影结构
+  - 输出层从 active states 沿 `state_evidence -> chunks -> documents` 回查证据，并按同文档、主体线索、相邻 chunk 与 section 做保守归组
+  - `generate_output()` 现在生成以上下文报告为主体的 `status.md`，孤立或缺少 evidence 的 state 进入待澄清区域
+  - `test_output_layer.py` 覆盖相邻 chunk 归组、跨文档不误合并、缺失 evidence 降级和默认输出入口
+- Alternatives rejected:
+  - 只做单条状态美化
+  - 为每条状态硬补背景
+  - 第一步直接新增 `context_bundles` 等重型持久化 schema
+  - 让 extractor 承担上下文聚合责任
+  - 把未持久化的 `relation_candidates` 当作正式上下文关系使用
+- Risk / debt accepted:
+  - v1 的 bundle 归组会依赖保守启发式，短期聚合质量有限
+  - 无法可靠归组的状态可能暂时不展示，需要后续 `needs_context` 策略继续细化
+  - `retrieval_candidates` 只能作为待确认线索，不代表已确认实体或背景
+- Follow-up:
+  - v1 先验证只读 bundle 输出单位是否正确
+  - v2 再引入 profile 级完整性提示和更明确的 `needs_context` 输出策略
+  - v3 评估持久化 `context_bundles` / `context_bundle_evidence`
+  - v4 在隐私、成本、可重复测试都可接受时，再评估 LLM 辅助 bundle 标题和摘要生成
+
+## 2026-05-03
 
 ### 决策
 

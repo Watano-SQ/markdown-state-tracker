@@ -56,7 +56,9 @@
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
   - 选择活跃状态
   - 通过当前唯一的 `default` 输出 profile 包装现有输出配置
-  - 生成 Markdown
+  - 通过 `state_evidence -> chunks -> documents` 构造只读 `ContextBundle` 输出投影
+  - 生成以上下文 bundle 为主阅读单位的 Markdown
+  - 将缺少足够证据或上下文的状态降级到待澄清区域
   - 保存 `output/status.md` 兼容输出和输出快照
 - [layers/extractors/config.py](/D:/Apps/Python/lab/personal_prompt/layers/extractors/config.py)
   - `.env` 读取
@@ -151,6 +153,7 @@
 - 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱
+- `ContextBundle` 当前只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section 与主体线索等保守启发式
 - 仓库没有配置 lint/typecheck/CI 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认
 - 保留文档之间若出现冲突，当前默认以代码和本文件为准；更正式的权威顺序仍需要人类确认
