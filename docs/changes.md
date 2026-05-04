@@ -6,6 +6,41 @@
 
 ### 决策
 
+输出从 `ContextBundle` state 清单升级为主体 / 主题 narrative 报告；`contextual_bundle_narrative` 成为当前活跃 spec/plan。
+
+- Why:
+  - 最新 `status.md` 已有主体和上下文 bundle，但仍把小 state 作为 `summary + detail + confidence` 条目渲染，读者看到的仍是碎片清单
+  - 主体分类有价值，但主体下面还需要主题层，才能表达一个人或项目围绕哪件事形成了什么进展、问题和下一步
+  - 置信度目前没有明确读者语义，应先从正式 Markdown 移除，保留为内部诊断 / 后续设计债务
+  - LLM 可以帮助主题内语义分类和叙事整理，但必须限制在 output/profile 层，并保留规则回退
+- Decision:
+  - 新增 `docs/specs/contextual_bundle_narrative.md` 与 `docs/plans/contextual_bundle_narrative.md` 作为当前活跃 spec/plan
+  - 已实现的 discovery 阶段文档保留在 `docs/archive/specs/contextual_bundle_discovery.md` 与 `docs/archive/plans/contextual_bundle_discovery.md`
+  - 输出层新增只读 `CandidateTopicBundle` / `BundleNarrative` narrative 投影，不新增 SQLite schema
+  - 正式 Markdown 按主体和主题输出，每个主题有标题、summary 和语义栏目
+  - 正式 Markdown 不再显示 `置信度:`，也不再渲染旧式 state title/detail 双层条目
+  - 新增 `OUTPUT_NARRATIVE_MODE=rule|llm|auto`；默认 `rule`，`llm` / `auto` 失败后回退到规则 narrative
+- Implemented:
+  - `layers/output_layer.py` 从 `ContextBundleSelection` 生成候选主题 bundle 和 narrative
+  - 默认规则 narrative 能生成主题标题、bundle summary、栏目事实句和诊断信息
+  - 可选 LLM narrative classifier 支持 fake client 测试，并校验 JSON、栏目 kind 与 source state ids
+  - `generate_output()` 返回 topic bundle 数、narrative mode 和 narrative diagnostics
+  - `test_output_layer.py` 覆盖主题拆分、无置信度、无旧式条目、fake LLM 成功和 LLM 非法 source id 回退
+- Alternatives rejected:
+  - 继续只清理单条 state 渲染
+  - 让 LLM 直接从全库生成完整报告
+  - 把 narrative 结果持久化为正式状态事实
+  - 在本阶段过滤所有低信息条目
+- Risk / debt accepted:
+  - 规则 narrative 的摘要仍偏保守，主要用于无 API 回退和可重复测试
+  - 低信息条目暂不全面过滤，先观察主题 narrative 后的真实输出
+  - 置信度语义、跨文档主题合并、LLM 摘要质量和成本/隐私策略仍需后续设计
+- Follow-up:
+  - 观察生成的 narrative 输出，决定是否引入显著性排序、bundle 拆分阈值或低信息条目命运
+  - 后续若要跨文档主题合并，应先定义更强确认规则和独立 spec
+
+### 决策
+
 后续输出单位从碎片 `state` 条目转向证据驱动的上下文 `ContextBundle`，先在 output/profile 层做只读投影，而不是新增持久化 schema 或继续美化单条状态。
 
 - Why:
@@ -83,10 +118,10 @@
 
 - Why:
   - 多个阶段 spec/plan 同时留在活跃目录，会让实现对话难以判断当前任务边界
-  - `contextual_bundle_discovery` 已成为当前唯一活跃 spec/plan，旧阶段文档应保留历史价值但退出活跃事实源
+  - `contextual_bundle_discovery` 当时成为唯一活跃 spec/plan，旧阶段文档应保留历史价值但退出活跃事实源
   - 归档机制能避免“已实现 v1”“下一阶段计划”和历史阶段设计互相覆盖
 - Decision:
-  - 当前活跃 spec/plan 为 `docs/specs/contextual_bundle_discovery.md` 与 `docs/plans/contextual_bundle_discovery.md`
+  - 当时活跃 spec/plan 为 `docs/specs/contextual_bundle_discovery.md` 与 `docs/plans/contextual_bundle_discovery.md`；当前已由 `contextual_bundle_narrative` 取代
   - `docs/specs/_template.md` 与 `docs/plans/_template.md` 继续保留为模板
   - 其他 spec/plan 迁移到 `docs/archive/specs/` 与 `docs/archive/plans/`
   - 新阶段若取代当前活跃 spec/plan，应在同一变更中归档旧 pair，并在本文件记录 supersession

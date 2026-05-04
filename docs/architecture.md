@@ -58,12 +58,14 @@
   - 通过当前唯一的 `default` 输出 profile 包装现有输出配置
   - 通过 `state_evidence -> chunks -> documents` 构造只读 `ContextBundle` 输出投影
   - 使用局部相邻证据和同文档远距离强锚点回收发现上下文 bundle
-  - 生成以上下文 bundle 为主阅读单位的 Markdown
+  - 在 `ContextBundle` 之上构造只读 `CandidateTopicBundle` 与 `BundleNarrative` narrative 投影
+  - 默认用规则回退生成主体 / 主题报告；显式设置 `OUTPUT_NARRATIVE_MODE=llm|auto` 时可尝试 LLM 叙事分类，失败后回退
+  - 生成按主体和主题组织的 Markdown，不再在正式输出中显示置信度或旧式 state summary/detail 双层条目
   - 将缺少足够证据或上下文的状态保留为内部诊断，不渲染进正式 Markdown
   - 保存 `output/status.md` 兼容输出和输出快照
 - 当前活跃 spec/plan：
-  - [docs/specs/contextual_bundle_discovery.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/contextual_bundle_discovery.md)
-  - [docs/plans/contextual_bundle_discovery.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/contextual_bundle_discovery.md)
+  - [docs/specs/contextual_bundle_narrative.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/contextual_bundle_narrative.md)
+  - [docs/plans/contextual_bundle_narrative.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/contextual_bundle_narrative.md)
 - 归档规则：
   - `docs/specs/` 与 `docs/plans/` 只保留当前活跃任务和 `_template.md`
   - 已被取代的 spec/plan 移入 `docs/archive/specs/` 与 `docs/archive/plans/`
@@ -160,7 +162,8 @@
 - 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱
-- `ContextBundle` 当前只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式
+- `ContextBundle` / `CandidateTopicBundle` / `BundleNarrative` 当前都只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式
+- LLM narrative 分类只是可选输出整理器，不是新的 extractor 或 aggregator；默认 rule 模式不需要真实 API
 - 未归组 state 当前只进入输出层返回值和日志诊断，不作为 `status.md` 的正式 `待澄清` 章节展示
 - 仓库没有配置 lint/typecheck/CI 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认

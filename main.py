@@ -355,7 +355,9 @@ def run_pipeline(skip_extraction: bool = False, verbose: bool = True) -> dict:
         output_result = generate_output()
         results['output'] = output_result
         _console_print(verbose, f"  - 输出文件: {output_result['output_path']}")
-        _console_print(verbose, f"  - 状态项数: {output_result['total_items']}")
+        _console_print(verbose, f"  - 主题数: {output_result.get('topic_bundle_count', 0)}")
+        _console_print(verbose, f"  - 事实句数: {output_result['total_items']}")
+        _console_print(verbose, f"  - narrative 模式: {output_result.get('narrative_mode', 'rule')}")
         _console_print(verbose, f"  - 快照 ID: {output_result['snapshot_id']}")
         log_event(
             logger,
@@ -365,6 +367,8 @@ def run_pipeline(skip_extraction: bool = False, verbose: bool = True) -> dict:
             stage="pipeline",
             output_path=output_result['output_path'],
             total_items=output_result['total_items'],
+            topic_bundle_count=output_result.get('topic_bundle_count', 0),
+            narrative_mode=output_result.get('narrative_mode', 'rule'),
             snapshot_id=output_result['snapshot_id'],
             duration_ms=(perf_counter() - output_start) * 1000,
         )
@@ -379,6 +383,7 @@ def run_pipeline(skip_extraction: bool = False, verbose: bool = True) -> dict:
             pending_chunks=results['middle']['pending_chunks'],
             total_documents=results['input']['total'],
             total_items=results['output']['total_items'],
+            topic_bundle_count=results['output'].get('topic_bundle_count', 0),
         )
         _console_print(verbose, "\n" + "=" * 50)
         _console_print(verbose, "处理完成!")

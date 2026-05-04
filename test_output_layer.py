@@ -11,10 +11,20 @@ import db.connection as db_connection
 from db import close_connection, init_db
 from layers.output_layer import (
     DEFAULT_PROFILE_NAME,
+    build_bundle_narratives,
     generate_output,
+    generate_contextual_status_document,
     get_output_profile,
     select_context_bundles_for_output,
 )
+
+
+class FakeNarrativeClient:
+    def __init__(self, response):
+        self.response = response
+
+    def create_narrative(self, payload):
+        return self.response
 
 
 class OutputLayerProfileTests(unittest.TestCase):
@@ -440,11 +450,162 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertEqual(result["total_items"], 2)
         self.assertEqual(result["needs_context_items"], 1)
         self.assertEqual(result["diagnostics"]["bundle_count"], 1)
+        self.assertEqual(result["topic_bundle_count"], 1)
+        self.assertEqual(result["narrative_mode"], "rule")
         self.assertIn("## 上下文报告", content)
-        self.assertIn("### Render Alpha", content)
-        self.assertIn("#### 进展", content)
-        self.assertIn("#### 下一步", content)
+        self.assertIn("### project-alpha", content)
+        self.assertIn("#### Project Alpha", content)
+        self.assertIn("本主题围绕Project Alpha", content)
+        self.assertIn("##### 进展", content)
+        self.assertIn("##### 下一步", content)
+        self.assertNotIn("置信度:", content)
+        self.assertNotIn("- **", content)
         self.assertNotIn("## 待澄清", content)
+
+    def test_contextual_output_splits_subject_into_topic_narratives(self) -> None:
+        document_id = self.insert_document("input_docs/person-alpha.md", "Person Alpha")
+        docker_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "Docker mirror configuration failed and needs another source.",
+            section_label="Docker",
+        )
+        mcp_chunk_id = self.insert_chunk(
+            document_id,
+            1,
+            "MCP client setup is being explored separately.",
+            section_label="MCP",
+        )
+        docker_state_id = self.insert_state(
+            "Docker mirror setup failed",
+            subtype="recent_event",
+            subject_type="person",
+            subject_key="alice",
+        )
+        mcp_state_id = self.insert_state(
+            "Explore MCP client setup",
+            subtype="pending_task",
+            subject_type="person",
+            subject_key="alice",
+        )
+        self.insert_evidence(docker_state_id, docker_chunk_id)
+        self.insert_evidence(mcp_state_id, mcp_chunk_id)
+        output_path = self.make_output_path("-topics.md")
+
+        result = generate_output(output_path=output_path)
+        content = output_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result["bundle_count"], 1)
+        self.assertEqual(result["topic_bundle_count"], 2)
+        self.assertIn("### alice", content)
+        self.assertIn("#### Docker", content)
+        self.assertIn("#### MCP", content)
+        self.assertIn("##### 问题", content)
+        self.assertIn("##### 下一步", content)
+
+    def test_llm_narrative_uses_fake_client_without_real_api(self) -> None:
+        document_id = self.insert_document("input_docs/llm-alpha.md", "LLM Alpha")
+        chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "The local evidence describes a narrative classifier.",
+            section_label="Narrative",
+        )
+        self.insert_chunk(
+            document_id,
+            1,
+            "Adjacent context keeps the single state in a reliable bundle.",
+            section_label="Narrative",
+        )
+        state_id = self.insert_state(
+            "Build narrative classifier",
+            subject_type="project",
+            subject_key="narrative-alpha",
+        )
+        self.insert_evidence(state_id, chunk_id)
+        selection = select_context_bundles_for_output()
+        fake_client = FakeNarrativeClient(
+            {
+                "topic_title": "LLM 叙事分类器",
+                "bundle_summary": "该主题正在验证 LLM 分类器能否整理已有证据。",
+                "sections": [
+                    {
+                        "kind": "current_goal",
+                        "text": "验证 LLM 分类器整理已有证据。",
+                        "source_state_ids": [state_id],
+                    }
+                ],
+                "absorbed_state_ids": [state_id],
+                "omitted_state_ids": [],
+            }
+        )
+
+        narratives, diagnostics = build_bundle_narratives(
+            selection,
+            narrative_mode="llm",
+            narrative_client=fake_client,
+        )
+        content = generate_contextual_status_document(
+            selection,
+            narrative_mode="llm",
+            narrative_client=fake_client,
+            narratives=narratives,
+        )
+
+        self.assertEqual(diagnostics["llm_success_count"], 1)
+        self.assertIn("#### LLM 叙事分类器", content)
+        self.assertIn("##### 当前目标", content)
+        self.assertNotIn("##### 问题", content)
+        self.assertNotIn("置信度:", content)
+
+    def test_llm_narrative_invalid_state_id_falls_back_to_rule(self) -> None:
+        document_id = self.insert_document("input_docs/fallback-alpha.md", "Fallback Alpha")
+        chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "Fallback evidence can still render without LLM output.",
+            section_label="Fallback",
+        )
+        self.insert_chunk(
+            document_id,
+            1,
+            "Adjacent fallback context is available.",
+            section_label="Fallback",
+        )
+        state_id = self.insert_state(
+            "Fallback renders rule narrative",
+            subject_type="project",
+            subject_key="fallback-alpha",
+        )
+        self.insert_evidence(state_id, chunk_id)
+        selection = select_context_bundles_for_output()
+        fake_client = FakeNarrativeClient(
+            {
+                "topic_title": "Invalid LLM Topic",
+                "bundle_summary": "This should not render.",
+                "sections": [
+                    {
+                        "kind": "progress",
+                        "text": "References an unknown state.",
+                        "source_state_ids": [999],
+                    }
+                ],
+                "absorbed_state_ids": [999],
+                "omitted_state_ids": [],
+            }
+        )
+
+        narratives, diagnostics = build_bundle_narratives(
+            selection,
+            narrative_mode="llm",
+            narrative_client=fake_client,
+        )
+        content = generate_contextual_status_document(selection, narratives=narratives)
+
+        self.assertEqual(diagnostics["llm_failure_count"], 1)
+        self.assertEqual(diagnostics["fallback_count"], 1)
+        self.assertIn("#### Fallback", content)
+        self.assertNotIn("Invalid LLM Topic", content)
 
 
 if __name__ == "__main__":

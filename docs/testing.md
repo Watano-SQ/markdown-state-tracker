@@ -35,6 +35,14 @@ python main.py --skip-extraction
 python main.py --stats
 ```
 
+输出 narrative 默认使用规则模式，不需要真实 API。
+如需显式验证默认模式：
+
+```bash
+$env:OUTPUT_NARRATIVE_MODE="rule"
+python main.py --skip-extraction
+```
+
 ## 可选：完整抽取验证
 
 如果 `.env` 已配置：
@@ -49,7 +57,16 @@ python main.py
 - 抽取日志写入成功
 - `extractions` 表中出现记录
 - `states` 表中出现聚合结果
-- `output/status.md` 不再只有空骨架
+- `output/status.md` 不再只有空骨架，并按主体 / 主题 narrative 展示
+
+可选验证 LLM narrative 分类器：
+
+```bash
+$env:OUTPUT_NARRATIVE_MODE="llm"
+python main.py --skip-extraction
+```
+
+如果 LLM narrative 请求失败，输出层应回退到规则 narrative，而不是让主流程失败。
 
 不要把“完整状态管理”理解成“已经全部完成”。  
 当前主链路里，基础聚合已接通，失败 chunk 有最小 pending 恢复，`retrieval_candidates` 有 pending 候选池；但完整失败状态机、关系落库、检索候选裁决/完整生命周期仍未完成。
@@ -83,6 +100,7 @@ sqlite3 data/state.db "SELECT COUNT(*) FROM extractions;"
 - 现有测试不依赖真实 API
 - 输入边界与来源类型改动应至少跑 `python -m unittest test_input_layer.py`
 - 在已有 `extractions` 的情况下，主流程会尝试聚合并生成 `states`
+- `output/status.md` 正式内容不应显示 `置信度:`，也不应渲染旧式 state summary/detail 双层条目
 - 日志中应能看到 pipeline 和 extraction 事件
 
 ## 可选诊断脚本
