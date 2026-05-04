@@ -1,5 +1,56 @@
 # 变更与决策
 
+## 2026-05-04
+
+### 决策
+
+第五阶段先只落地 `retrieval_candidates` 的 pending 持久化命运；`relation_candidates` 继续保留在 extraction JSON 中，不直接写入正式 `relations`。
+
+- Why:
+  - `retrieval_candidates` 已有数据库候选池，适合先作为 pending 裁决对象持久化
+  - `RelationCandidate` 的 source/target 仍是自然语言文本，缺少稳定 id，直接写入 `relations` 会制造不可靠正式关系
+  - 本阶段目标是“持久化命运”的最小切片，不扩展成关系图谱、检索系统、embedding、联网搜索或外部知识库
+- Implemented:
+  - `layers/aggregator.py` 在聚合 extraction 时会把 `retrieval_candidates` 写入 `retrieval_candidates` 表
+  - 候选按 `surface_form` 与 source chunk 维持幂等，重复聚合不会重复增加同一 chunk 证据
+  - 空白 `surface_form` 会被跳过，`priority` 被限制在 0 到 10
+  - 聚合结果统计新增 retrieval candidate 处理计数
+  - `test_aggregator.py` 覆盖 pending 写入、跳过空白项与重复聚合幂等
+- Alternatives rejected:
+  - 继续完全忽略 `retrieval_candidates`
+  - 直接把 `relation_candidates` 写入正式 `relations`
+  - 在当前阶段引入实体 registry、关系图谱、搜索或 embedding
+- Risk / debt accepted:
+  - `retrieval_candidates` 仍只是 pending 候选池，不代表已确认实体或检索结果
+  - `relation_candidates` 仍未进入 pending 持久化链路，也不会直接升格为正式关系
+- Follow-up:
+  - 后续若要处理 `relation_candidates`，应先定义 pending 关系候选层或等价裁决记录，再评估正式 relation 晋升规则
+
+### 决策
+
+第六阶段先落地 `default` 输出 profile 兼容壳层，而不是同时实现 CLI profile 入口、真实场景筛选或多文件 profile 矩阵。
+
+- Why:
+  - `state_output_profiles` 计划要求先让输出层入口 profile-aware，同时保持现有 `output/status.md` 兼容输出
+  - 当前统一状态底座仍处于渐进阶段，真实 personal/team/project profile 还不应抢跑筛选策略
+  - 先用唯一 `default` profile 包装现有 `OUTPUT_CONFIG`，可以把输出层从硬编码入口迁移到可扩展结构而不改变用户可见结果
+- Implemented:
+  - 在 `layers/output_layer.py` 新增 `OutputProfile`、`DEFAULT_PROFILE_NAME` 与 profile registry，目前只注册 `default`
+  - `generate_output()` 保持无参兼容，同时支持 `generate_output(profile_name="default")`
+  - `select_states_for_output()` 与 `generate_status_document()` 改为消费当前 profile 的配置
+  - 新增 `test_output_layer.py` 验证无参 default、显式 default 与未知 profile 错误
+  - `docs/architecture.md` 和 `docs/testing.md` 已同步输出层职责与测试命令
+- Alternatives rejected:
+  - 立刻加入 `--profile` CLI 参数
+  - 一次性实现 personal/team/project 等真实 profile 策略
+  - 一次运行生成多套 profile 输出文件
+- Risk / debt accepted:
+  - 当前只有 `default` profile，profile 机制短期主要是结构迁移，用户可见输出基本不变
+  - profile 级显著性、完整性提示和真实场景筛选仍依赖后续主体归属与统一状态底座继续成熟
+- Follow-up:
+  - 下一步再按计划评估单 profile 选择入口，例如 `--profile default`
+  - 在有可靠完成度信号后，再补 profile 级完整性提示和显著性策略
+
 ## 2026-05-02
 
 ### 决策
