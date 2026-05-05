@@ -2,6 +2,42 @@
 >本文档应当按照日期倒序来写，也即最新日期在前。
 
 
+## 2026-05-05
+
+### 决策
+
+下一阶段从 `contextual_bundle_narrative` 切换到 `contextual_bundle_reading_view`：继续保留主体 / 主题 bundle 方向，但修正正式 Markdown 的阅读形态，避免硬分类小节、弱标题和 `summary：detail` 式子条目。
+
+- Why:
+  - 最新输出已经能形成主题 bundle，但 `进展`、`问题`、`下一步`、`相关线索` 等硬分类会把同一上下文切碎，读者仍要自己拼回事件整体
+  - 子条目仍可能渲染 `summary：detail`，例如 `高度认可WhisperDesktop：WhisperDesktop，伟大。`，说明 state summary 仍泄漏成正式条目标签
+  - 规则 bundle summary 可能退化为 details 的拼接或枚举，不能提供真正的上下文入口
+  - 弱标题如 `工具：` 会把低信息 state 包装成看似正式的主题
+- Decision:
+  - 新增 `docs/specs/contextual_bundle_reading_view.md` 与 `docs/plans/contextual_bundle_reading_view.md` 作为当前活跃 spec/plan
+  - 已实现的 `contextual_bundle_narrative` 文档归档到 `docs/archive/specs/contextual_bundle_narrative.md` 与 `docs/archive/plans/contextual_bundle_narrative.md`
+  - 正式 `status.md` 下一阶段不再渲染固定语义小节标题；kind / section / subtype 只保留为内部排序、诊断或 LLM 校验信息
+  - 每个正式主题 bundle 只保留一个 bundle-level summary；summary 不得只是子条目 summary/detail 的拼接或 `主要涉及：...` 式枚举
+  - 子条目优先渲染 detail / evidence 支撑的事实句，不再使用 state summary 作为标签或前缀
+  - 低信息评价类 state 不得独立构成正式 bundle；能支撑工具选择或偏好上下文时吸收，否则进入 omitted diagnostics
+  - 继续保持 `needs_context` 不进入正式 Markdown，且暂不设置输出数量阈值
+- Implemented:
+  - `layers/output_layer.py` 的正式 Markdown 渲染改为主题 summary 后直接平铺事实句，不再显示固定语义小节标题
+  - 规则 summary 改为上下文说明，不再使用 `主要涉及：` / `核心信息是：` 枚举子条目
+  - 子条目优先使用 detail / evidence，不再拼接 `summary：detail`
+  - 弱标题会回退到强锚点、evidence、文档或主体线索；`工具：` 等泛化标签不作为正式主题标题
+  - 孤立低信息评价类 state 进入 omitted diagnostics；有工具比较等上下文时可作为平铺事实句被吸收
+  - fake LLM 路径继续可用，但 renderer 不把 LLM kind 渲染成可见小节；空 summary、非法 source id 等仍回退 rule
+  - `test_output_layer.py` 覆盖平铺渲染、summary 非拼接、弱标题清洗、低信息评价省略/吸收和 LLM 回退
+- Alternatives rejected:
+  - 继续只调小节分类或设置输出数量阈值
+  - 把 `needs_context` 渲染成正式章节来解释缺口
+  - 允许子条目继续以 `summary：detail` 形态出现
+  - 为了 summary 完整感硬补无法验证的背景
+- Follow-up:
+  - 后续实现先跑 `python -m unittest test_output_layer.py`
+  - 实际生成输出后再观察 bundle 数量、每个 bundle 的 state 数、合并依据、未归组原因、弱标题和低信息评价类省略情况
+
 ## 2026-05-04
 
 ### 决策

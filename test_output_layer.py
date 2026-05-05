@@ -420,7 +420,7 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertEqual(bundle.evidence_chunk_ids, [source_chunk_id, neighbor_chunk_id])
         self.assertIn("neighbor_chunk_context", bundle.merge_basis)
 
-    def test_generate_output_renders_contextual_bundle_sections(self) -> None:
+    def test_generate_output_renders_flat_reading_view(self) -> None:
         document_id = self.insert_document("input_docs/render-alpha.md", "Render Alpha")
         first_chunk_id = self.insert_chunk(
             document_id,
@@ -455,9 +455,12 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertIn("## 上下文报告", content)
         self.assertIn("### project-alpha", content)
         self.assertIn("#### Project Alpha", content)
-        self.assertIn("本主题围绕Project Alpha", content)
-        self.assertIn("##### 进展", content)
-        self.assertIn("##### 下一步", content)
+        self.assertIn("这是围绕Project Alpha的上下文", content)
+        self.assertNotIn("##### 进展", content)
+        self.assertNotIn("##### 下一步", content)
+        self.assertNotIn("主要涉及：", content)
+        self.assertNotIn("核心信息是：", content)
+        self.assertNotIn("Rendering uses evidence backed bundles：", content)
         self.assertNotIn("置信度:", content)
         self.assertNotIn("- **", content)
         self.assertNotIn("## 待澄清", content)
@@ -500,8 +503,102 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertIn("### alice", content)
         self.assertIn("#### Docker", content)
         self.assertIn("#### MCP", content)
-        self.assertIn("##### 问题", content)
-        self.assertIn("##### 下一步", content)
+        self.assertNotIn("##### 问题", content)
+        self.assertNotIn("##### 下一步", content)
+
+    def test_reading_view_cleans_weak_topic_title(self) -> None:
+        document_id = self.insert_document("input_docs/weak-title.md", "Weak Title Doc")
+        chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "工具：WhisperDesktop is being compared with another local tool.",
+            section_label="工具：",
+        )
+        self.insert_chunk(
+            document_id,
+            1,
+            "The adjacent context confirms this is a tool comparison.",
+            section_label="工具：",
+        )
+        state_id = self.insert_state(
+            "工具：",
+            detail="WhisperDesktop 正在和其他本地转写工具比较。",
+            subject_type="project",
+            subject_key="weak-title",
+        )
+        self.insert_evidence(state_id, chunk_id)
+        output_path = self.make_output_path("-weak-title.md")
+
+        generate_output(output_path=output_path)
+        content = output_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("#### 工具：", content)
+        self.assertIn("WhisperDesktop 正在和其他本地转写工具比较。", content)
+
+    def test_low_information_evaluation_is_omitted_when_isolated(self) -> None:
+        document_id = self.insert_document("input_docs/low-info.md", "Low Info")
+        chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "WhisperDesktop，伟大。",
+            section_label="WhisperDesktop",
+        )
+        self.insert_chunk(
+            document_id,
+            1,
+            "Only adjacent context exists, with no tool comparison.",
+            section_label="WhisperDesktop",
+        )
+        state_id = self.insert_state(
+            "高度认可WhisperDesktop",
+            detail="WhisperDesktop，伟大。",
+            subject_type="project",
+            subject_key="low-info",
+        )
+        self.insert_evidence(state_id, chunk_id)
+        output_path = self.make_output_path("-low-info.md")
+
+        result = generate_output(output_path=output_path)
+        content = output_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("WhisperDesktop，伟大。", content)
+        self.assertEqual(result["diagnostics"]["narrative"]["low_information_omitted_count"], 1)
+
+    def test_evaluation_state_can_be_absorbed_with_tool_context(self) -> None:
+        document_id = self.insert_document("input_docs/tool-context.md", "Tool Context")
+        praise_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "WhisperDesktop is part of a local transcription comparison.",
+            section_label="WhisperDesktop",
+        )
+        comparison_chunk_id = self.insert_chunk(
+            document_id,
+            1,
+            "The comparison focuses on stability and replacement choices.",
+            section_label="WhisperDesktop",
+        )
+        praise_state_id = self.insert_state(
+            "高度认可WhisperDesktop",
+            detail="WhisperDesktop 在本地转写比较中表现更稳定。",
+            subject_type="project",
+            subject_key="tool-context",
+        )
+        comparison_state_id = self.insert_state(
+            "Compare transcription tools",
+            detail="当前正在比较本地转写工具的稳定性和替代选择。",
+            subject_type="project",
+            subject_key="tool-context",
+        )
+        self.insert_evidence(praise_state_id, praise_chunk_id)
+        self.insert_evidence(comparison_state_id, comparison_chunk_id)
+        output_path = self.make_output_path("-tool-context.md")
+
+        generate_output(output_path=output_path)
+        content = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("WhisperDesktop 在本地转写比较中表现更稳定。", content)
+        self.assertNotIn("高度认可WhisperDesktop：", content)
 
     def test_llm_narrative_uses_fake_client_without_real_api(self) -> None:
         document_id = self.insert_document("input_docs/llm-alpha.md", "LLM Alpha")
@@ -554,7 +651,8 @@ class OutputLayerProfileTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["llm_success_count"], 1)
         self.assertIn("#### LLM 叙事分类器", content)
-        self.assertIn("##### 当前目标", content)
+        self.assertIn("- 验证 LLM 分类器整理已有证据。", content)
+        self.assertNotIn("##### 当前目标", content)
         self.assertNotIn("##### 问题", content)
         self.assertNotIn("置信度:", content)
 
@@ -606,6 +704,55 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertEqual(diagnostics["fallback_count"], 1)
         self.assertIn("#### Fallback", content)
         self.assertNotIn("Invalid LLM Topic", content)
+
+    def test_llm_narrative_empty_summary_falls_back_to_rule(self) -> None:
+        document_id = self.insert_document("input_docs/empty-summary.md", "Empty Summary")
+        chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "The local evidence supports rule fallback.",
+            section_label="Empty Summary",
+        )
+        self.insert_chunk(
+            document_id,
+            1,
+            "Adjacent evidence keeps the bundle reliable.",
+            section_label="Empty Summary",
+        )
+        state_id = self.insert_state(
+            "Fallback from empty summary",
+            subject_type="project",
+            subject_key="empty-summary",
+        )
+        self.insert_evidence(state_id, chunk_id)
+        selection = select_context_bundles_for_output()
+        fake_client = FakeNarrativeClient(
+            {
+                "topic_title": "Empty Summary",
+                "bundle_summary": "",
+                "sections": [
+                    {
+                        "kind": "progress",
+                        "text": "This should fall back.",
+                        "source_state_ids": [state_id],
+                    }
+                ],
+                "absorbed_state_ids": [state_id],
+                "omitted_state_ids": [],
+            }
+        )
+
+        narratives, diagnostics = build_bundle_narratives(
+            selection,
+            narrative_mode="llm",
+            narrative_client=fake_client,
+        )
+        content = generate_contextual_status_document(selection, narratives=narratives)
+
+        self.assertEqual(diagnostics["llm_failure_count"], 1)
+        self.assertEqual(diagnostics["fallback_count"], 1)
+        self.assertIn("#### Empty Summary", content)
+        self.assertNotIn("This should fall back.", content)
 
 
 if __name__ == "__main__":

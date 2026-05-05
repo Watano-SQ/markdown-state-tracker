@@ -90,7 +90,7 @@ python main.py --init
 - `data/state.db`：数据库
 - `data/logs/pipeline.log`：日志
 - `output/status.md`：输出文档
-- `docs/specs/contextual_bundle_narrative.md` 与 `docs/plans/contextual_bundle_narrative.md`：当前活跃 spec/plan
+- `docs/specs/contextual_bundle_reading_view.md` 与 `docs/plans/contextual_bundle_reading_view.md`：当前活跃 spec/plan
 - `docs/archive/specs/` 与 `docs/archive/plans/`：已归档的历史 spec/plan
 
 ## 继续阅读

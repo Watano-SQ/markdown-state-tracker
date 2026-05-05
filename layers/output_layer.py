@@ -114,6 +114,34 @@ NARRATIVE_SECTION_TITLES = {
     "next_step": "下一步",
     "related_context": "相关线索",
 }
+WEAK_TOPIC_TITLES = {
+    "当前目标",
+    "进展",
+    "问题",
+    "下一步",
+    "相关线索",
+    "工具",
+    "工具:",
+    "工具：",
+    "背景",
+    "背景:",
+    "背景：",
+}
+LOW_INFORMATION_EVALUATION_HINTS = (
+    "伟大",
+    "好用",
+    "高度认可",
+    "认可",
+    "喜欢",
+    "不错",
+    "很棒",
+)
+FORBIDDEN_SUMMARY_PHRASES = (
+    "主要涉及：",
+    "主要涉及:",
+    "核心信息是：",
+    "核心信息是:",
+)
 
 
 @dataclass(frozen=True)
@@ -695,9 +723,13 @@ def build_bundle_narratives(
     fallback_count = 0
     llm_success_count = 0
     llm_failure_count = 0
+    weak_title_candidate_count = 0
+    omitted_reason_counts: Dict[str, int] = {}
     candidate_diagnostics: List[Dict[str, Any]] = []
 
     for candidate in candidates:
+        if not _clean_topic_title(candidate.topic_title_hint):
+            weak_title_candidate_count += 1
         narrative: BundleNarrative
         used_fallback = False
         error_message: Optional[str] = None
@@ -726,6 +758,11 @@ def build_bundle_narratives(
                 )
                 narrative = _build_rule_bundle_narrative(candidate)
 
+        for omitted in narrative.omitted_state_ids:
+            omitted_reason_counts[omitted.reason] = (
+                omitted_reason_counts.get(omitted.reason, 0) + 1
+            )
+
         if narrative.sections:
             narratives.append(narrative)
         candidate_diagnostics.append(
@@ -744,6 +781,12 @@ def build_bundle_narratives(
         "candidate_topic_bundle_count": len(candidates),
         "narrative_count": len(narratives),
         "narrative_section_count": sum(len(item.sections) for item in narratives),
+        "weak_title_candidate_count": weak_title_candidate_count,
+        "low_information_omitted_count": omitted_reason_counts.get(
+            "low_information_evaluation",
+            0,
+        ),
+        "omitted_reason_counts": omitted_reason_counts,
         "llm_success_count": llm_success_count,
         "llm_failure_count": llm_failure_count,
         "fallback_count": fallback_count,
@@ -900,8 +943,13 @@ def _build_rule_bundle_narrative(candidate: CandidateTopicBundle) -> BundleNarra
     sections: List[NarrativeSectionItem] = []
     omitted: List[OmittedNarrativeState] = []
     absorbed_state_ids: List[int] = []
+    topic_title = _rule_topic_title(candidate)
 
     for item in candidate.evidence_items:
+        if _should_omit_low_information_item(item, candidate):
+            omitted.append(OmittedNarrativeState(item.state_id, "low_information_evaluation"))
+            continue
+
         text = _fact_sentence_for_item(item)
         if not text:
             omitted.append(OmittedNarrativeState(item.state_id, "too_vague"))
@@ -922,8 +970,8 @@ def _build_rule_bundle_narrative(candidate: CandidateTopicBundle) -> BundleNarra
         subject_label=candidate.subject_label,
         source_document=candidate.source_document,
         topic_key=candidate.topic_key,
-        topic_title=_rule_topic_title(candidate),
-        bundle_summary=_rule_bundle_summary(candidate, sections),
+        topic_title=topic_title,
+        bundle_summary=_rule_bundle_summary(candidate, sections, topic_title),
         sections=tuple(sections),
         absorbed_state_ids=tuple(absorbed_state_ids),
         omitted_state_ids=tuple(omitted),
@@ -936,27 +984,73 @@ def _build_rule_bundle_narrative(candidate: CandidateTopicBundle) -> BundleNarra
 
 
 def _rule_topic_title(candidate: CandidateTopicBundle) -> str:
-    title = candidate.topic_title_hint.strip()
-    if title:
-        return title
-    if candidate.sections:
-        return candidate.sections[0]
-    return candidate.subject_label
+    candidates = [
+        candidate.topic_title_hint,
+        *candidate.sections,
+        *_title_hints_from_evidence(candidate.evidence_items),
+        Path(candidate.source_document).stem,
+        candidate.subject_label,
+    ]
+    for title in candidates:
+        cleaned = _clean_topic_title(title)
+        if cleaned:
+            return cleaned
+    return "未命名主题"
+
+
+def _title_hints_from_evidence(
+    evidence_items: tuple[NarrativeEvidenceItem, ...],
+) -> List[str]:
+    hints: List[str] = []
+    for item in evidence_items:
+        for anchor in item.strong_anchors:
+            if anchor.startswith("subject:"):
+                continue
+            hints.append(_title_from_anchor(anchor))
+        if item.detail:
+            hints.append(_topic_phrase_from_text(item.detail))
+        if item.evidence_excerpt:
+            hints.append(_topic_phrase_from_text(item.evidence_excerpt))
+    return hints
+
+
+def _clean_topic_title(value: Optional[str]) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" #*`-_")
+    text = text.strip()
+    text = re.sub(r"^[：:]+|[：:]+$", "", text).strip()
+    if not text:
+        return ""
+    if text in WEAK_TOPIC_TITLES:
+        return ""
+    if len(text) <= 1:
+        return ""
+    return _shorten_text(text, 48)
 
 
 def _rule_bundle_summary(
     candidate: CandidateTopicBundle,
     sections: List[NarrativeSectionItem],
+    topic_title: str,
 ) -> str:
     if not sections:
-        return f"本主题围绕{_rule_topic_title(candidate)}，但当前还缺少可渲染的事实句。"
+        return ""
 
-    first_facts = [item.text.rstrip("。") for item in sections[:2]]
-    if len(sections) == 1:
-        return f"本主题围绕{_rule_topic_title(candidate)}，核心信息是：{first_facts[0]}。"
+    kinds = {item.kind for item in sections}
+    signals = []
+    if "problem" in kinds:
+        signals.append("问题")
+    if "next_step" in kinds:
+        signals.append("下一步")
+    if "progress" in kinds:
+        signals.append("进展")
+    if not signals:
+        signals.append("背景线索")
+
+    state_count = len(set(candidate.state_ids))
+    signal_text = "、".join(signals)
     return (
-        f"本主题围绕{_rule_topic_title(candidate)}，聚合了 {len(candidate.state_ids)} "
-        f"条可追溯状态，主要涉及：{'；'.join(first_facts)}。"
+        f"这是围绕{topic_title}的上下文，汇集了 {state_count} 条可追溯线索，"
+        f"用于呈现当前的{signal_text}。"
     )
 
 
@@ -976,13 +1070,45 @@ def _narrative_kind_for_item(item: NarrativeEvidenceItem) -> str:
 def _fact_sentence_for_item(item: NarrativeEvidenceItem) -> str:
     summary = (item.summary or "").strip()
     detail = (item.detail or "").strip()
+    evidence = (item.evidence_excerpt or "").strip()
 
-    if detail and summary and not _texts_are_redundant(summary, detail):
-        text = f"{summary}：{detail}"
+    if detail and not _is_weak_child_text(detail):
+        text = detail
+    elif evidence and not _is_weak_child_text(evidence):
+        text = evidence
+    elif summary and not _is_weak_child_text(summary):
+        text = summary
     else:
-        text = max([summary, detail], key=len, default="")
+        text = ""
 
     return _ensure_sentence(_shorten_text(text, 220))
+
+
+def _should_omit_low_information_item(
+    item: NarrativeEvidenceItem,
+    candidate: CandidateTopicBundle,
+) -> bool:
+    texts = [item.summary, item.detail or "", item.evidence_excerpt or ""]
+    if not any(_looks_like_low_information_evaluation(text) for text in texts):
+        return False
+    return len(candidate.evidence_items) == 1
+
+
+def _looks_like_low_information_evaluation(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return True
+    has_hint = any(hint in compact for hint in LOW_INFORMATION_EVALUATION_HINTS)
+    return has_hint and len(compact) <= 48
+
+
+def _is_weak_child_text(text: str) -> bool:
+    stripped = re.sub(r"\s+", "", text)
+    if not stripped:
+        return True
+    if stripped in WEAK_TOPIC_TITLES:
+        return True
+    return _looks_like_low_information_evaluation(text) and len(stripped) <= 16
 
 
 def _texts_are_redundant(left: str, right: str) -> bool:
@@ -1116,10 +1242,12 @@ def _bundle_narrative_from_llm_result(
     if not isinstance(result, dict):
         raise ValueError("LLM narrative result must be a JSON object")
 
-    topic_title = str(result.get("topic_title") or "").strip()
+    topic_title = _clean_topic_title(str(result.get("topic_title") or "").strip())
     bundle_summary = str(result.get("bundle_summary") or "").strip()
     if not topic_title or not bundle_summary:
         raise ValueError("LLM narrative requires topic_title and bundle_summary")
+    if any(phrase in bundle_summary for phrase in FORBIDDEN_SUMMARY_PHRASES):
+        raise ValueError("LLM narrative summary used item-list phrasing")
 
     allowed_state_ids = set(candidate.state_ids)
     sections_raw = result.get("sections")
@@ -1422,20 +1550,17 @@ def _render_bundle_narrative(narrative: BundleNarrative) -> List[str]:
     lines.append(narrative.bundle_summary)
     lines.append("")
 
-    sections_by_kind: Dict[str, List[NarrativeSectionItem]] = {
+    items_by_kind: Dict[str, List[NarrativeSectionItem]] = {
         kind: [] for kind in NARRATIVE_SECTION_ORDER
     }
     for item in narrative.sections:
-        sections_by_kind.setdefault(item.kind, []).append(item)
+        items_by_kind.setdefault(item.kind, []).append(item)
 
     for kind in NARRATIVE_SECTION_ORDER:
-        items = sections_by_kind.get(kind) or []
-        if not items:
-            continue
-        lines.append(f"##### {NARRATIVE_SECTION_TITLES[kind]}")
-        lines.append("")
-        for item in items:
+        for item in items_by_kind.get(kind) or []:
             lines.append(f"- {item.text}")
+
+    if narrative.sections:
         lines.append("")
 
     return lines

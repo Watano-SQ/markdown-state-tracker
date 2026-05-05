@@ -100,7 +100,7 @@ sqlite3 data/state.db "SELECT COUNT(*) FROM extractions;"
 - 现有测试不依赖真实 API
 - 输入边界与来源类型改动应至少跑 `python -m unittest test_input_layer.py`
 - 在已有 `extractions` 的情况下，主流程会尝试聚合并生成 `states`
-- `output/status.md` 正式内容不应显示 `置信度:`，也不应渲染旧式 state summary/detail 双层条目
+- `output/status.md` 正式内容不应显示 `置信度:`、固定语义小节标题或 `summary：detail` 式事实句
 - 日志中应能看到 pipeline 和 extraction 事件
 
 ## 可选诊断脚本

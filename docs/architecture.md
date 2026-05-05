@@ -60,12 +60,12 @@
   - 使用局部相邻证据和同文档远距离强锚点回收发现上下文 bundle
   - 在 `ContextBundle` 之上构造只读 `CandidateTopicBundle` 与 `BundleNarrative` narrative 投影
   - 默认用规则回退生成主体 / 主题报告；显式设置 `OUTPUT_NARRATIVE_MODE=llm|auto` 时可尝试 LLM 叙事分类，失败后回退
-  - 生成按主体和主题组织的 Markdown，不再在正式输出中显示置信度或旧式 state summary/detail 双层条目
+  - 生成按主体和主题组织的 reading-view Markdown，不显示置信度、固定语义小节或旧式 `summary：detail` 事实句
   - 将缺少足够证据或上下文的状态保留为内部诊断，不渲染进正式 Markdown
   - 保存 `output/status.md` 兼容输出和输出快照
 - 当前活跃 spec/plan：
-  - [docs/specs/contextual_bundle_narrative.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/contextual_bundle_narrative.md)
-  - [docs/plans/contextual_bundle_narrative.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/contextual_bundle_narrative.md)
+  - [docs/specs/contextual_bundle_reading_view.md](/D:/Apps/Python/lab/personal_prompt/docs/specs/contextual_bundle_reading_view.md)
+  - [docs/plans/contextual_bundle_reading_view.md](/D:/Apps/Python/lab/personal_prompt/docs/plans/contextual_bundle_reading_view.md)
 - 归档规则：
   - `docs/specs/` 与 `docs/plans/` 只保留当前活跃任务和 `_template.md`
   - 已被取代的 spec/plan 移入 `docs/archive/specs/` 与 `docs/archive/plans/`
@@ -165,6 +165,7 @@
 - `ContextBundle` / `CandidateTopicBundle` / `BundleNarrative` 当前都只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式
 - LLM narrative 分类只是可选输出整理器，不是新的 extractor 或 aggregator；默认 rule 模式不需要真实 API
 - 未归组 state 当前只进入输出层返回值和日志诊断，不作为 `status.md` 的正式 `待澄清` 章节展示
+- 低信息评价类 state 不会独立构成正式 bundle；只有能支撑工具选择、偏好或决策上下文时才会被吸收到阅读视图
 - 仓库没有配置 lint/typecheck/CI 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认
 - 保留文档之间若出现冲突，当前默认以代码和本文件为准；更正式的权威顺序仍需要人类确认
