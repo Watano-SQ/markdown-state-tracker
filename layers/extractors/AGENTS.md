@@ -15,7 +15,7 @@ This directory owns extractor configuration, prompt text, request/response handl
 ## Work Rules
 
 - Keep prompt/schema changes synchronized with the structured output actually expected by code.
-- If the extraction result shape changes, update `layers/middle_layer.py`, `.github/EXTRACTION_JSON_SCHEMA.md`, `test_extraction_schema.py`, and the prompt contract together.
+- If the extraction result shape changes, update `layers/middle_layer.py`, `.github/EXTRACTION_JSON_SCHEMA.md`, `tests/test_extraction_schema.py`, and the prompt contract together.
 - Keep preprocessing/postprocessing logic here or in `rule_helper.py`; keep state aggregation outside this directory.
 - Active docs currently describe the default OpenAI path only. Archived multi-provider docs are historical context, not the current documentation promise.
 - If provider behavior, cost, or support status cannot be verified from code, mark it as `需要人类补充`.

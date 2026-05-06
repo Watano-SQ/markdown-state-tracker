@@ -152,7 +152,7 @@
 - [layers/middle_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/middle_layer.py)
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
 - [layers/extractors/llm_extractor.py](/D:/Apps/Python/lab/personal_prompt/layers/extractors/llm_extractor.py)
-- [test_logging.py](/D:/Apps/Python/lab/personal_prompt/test_logging.py)
+- [tests/test_logging.py](/D:/Apps/Python/lab/personal_prompt/tests/test_logging.py)
 
 ## 未解决的结构性问题 / 信息缺口
 

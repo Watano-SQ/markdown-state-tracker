@@ -3,12 +3,15 @@ import os
 import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
 print("=" * 60)
 print("配置诊断工具")
 print("=" * 60)
 
 # 检查 .env 文件
-env_path = Path(__file__).parent / '.env'
+env_path = REPO_ROOT / '.env'
 print(f"\n[1] .env 文件检查:")
 print(f"    路径: {env_path}")
 print(f"    存在: {env_path.exists()}")

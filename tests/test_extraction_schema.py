@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 # 确保可以导入 layers 模块
-sys.path.insert(0, str(Path(__file__).parent))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from layers.middle_layer import (
     ExtractionResult, ExtractionContext, TimeInfo,

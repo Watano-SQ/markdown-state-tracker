@@ -500,8 +500,8 @@ chunks = chunk_document(doc.content, max_tokens=1000)  # 改这里
 
 当前项目已经有基础测试：
 
-1. `test_extraction_schema.py` - ExtractionResult schema
-2. `test_logging.py` - 日志初始化、截断、重试、跳过抽取、成功抽取
+1. `tests/test_extraction_schema.py` - ExtractionResult schema
+2. `tests/test_logging.py` - 日志初始化、截断、重试、跳过抽取、成功抽取
 
 除此之外，输入层 / 中间层 / 输出层 / 聚合逻辑仍应手工测试：
 

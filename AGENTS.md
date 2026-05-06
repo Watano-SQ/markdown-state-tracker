@@ -70,6 +70,17 @@ There is no repository-configured lint, typecheck, or CI command to claim by def
 - Keep only the current active implementation pair in `docs/specs/` and `docs/plans/` alongside `_template.md`; move superseded specs/plans to `docs/archive/specs/` and `docs/archive/plans/`.
 - If a new spec/plan supersedes the active pair, archive the old pair in the same change and record the supersession in `docs/changes.md`.
 
+## Resume Protocol
+
+When resuming interrupted work, start from retained docs, not `docs/archive/`.
+
+1. Read `AGENTS.md` for current workflow rules and red lines.
+2. Read the latest relevant entry in `docs/changes.md` for recent decisions and supersession.
+3. Read the current active spec in `docs/specs/` to recover task intent and design boundaries.
+4. Read the current active plan in `docs/plans/` only for the current execution route.
+5. Use `docs/archive/` only for historical decisions, rejected alternatives, or superseded designs.
+6. Do not infer current task state from archived files, old file names, or historical paths.
+
 ## Documentation Sync Rule
 
 After any non-trivial task, explicitly evaluate whether these files need updates:

@@ -15,7 +15,7 @@ This directory defines the SQLite schema and connection behavior. It is a high-b
 
 - Prefer additive, minimal schema changes over broad table redesign.
 - If `db/schema.py` changes, check and update affected SQL in `layers/input_layer.py`, `layers/middle_layer.py`, and `layers/output_layer.py`.
-- If extraction-related tables or payload fields change, also check `.github/EXTRACTION_JSON_SCHEMA.md`, `test_extraction_schema.py`, and the extractor prompt contract.
+- If extraction-related tables or payload fields change, also check `.github/EXTRACTION_JSON_SCHEMA.md`, `tests/test_extraction_schema.py`, and the extractor prompt contract.
 - If a schema change requires resetting `data/state.db`, say so explicitly instead of implying compatibility.
 - If compatibility or migration expectations cannot be inferred from code, mark them as `需要人类补充`.
 

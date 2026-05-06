@@ -24,9 +24,9 @@
   修改 Markdown 渲染：`BundleNarrative.sections` 可以继续作为内部结构存在，但正式输出只渲染平铺子项目；子项目文本优先 detail / evidence，不再拼接 summary 和 detail。
 - Files likely touched:
   `layers/output_layer.py`
-  `test_output_layer.py`
+  `tests/test_output_layer.py`
 - Validation:
-  `python -m unittest test_output_layer.py`
+  `python -m unittest tests.test_output_layer`
   至少覆盖：
   - 不渲染 `##### 进展` / `##### 问题` / `##### 下一步`
   - 不渲染 `summary：detail`
@@ -40,9 +40,9 @@
   重写规则 bundle summary 和标题清洗策略。summary 说明上下文，不枚举子条目；标题拒绝 `工具：`、`问题：`、`相关线索` 等弱标签，并回退到强锚点、文档标题或 section 上下文。
 - Files likely touched:
   `layers/output_layer.py`
-  `test_output_layer.py`
+  `tests/test_output_layer.py`
 - Validation:
-  `python -m unittest test_output_layer.py`
+  `python -m unittest tests.test_output_layer`
   至少覆盖：
   - summary 不包含 `主要涉及：` / `核心信息是：`
   - 弱标题 candidate 不以 `工具：` 形式进入正式 Markdown
@@ -56,10 +56,10 @@
   强化当前可用的本地上下文发现路径：source evidence chunk、邻近 chunk、同文档其他 chunk，以及显式可用的白名单补充材料。暂不接入 retrieval / MCP / 联网搜索。
 - Files likely touched:
   `layers/output_layer.py`
-  `test_output_layer.py`
+  `tests/test_output_layer.py`
   可选：轻量配置文件或 output profile 配置，如果仓库已有合适入口。
 - Validation:
-  `python -m unittest test_output_layer.py`
+  `python -m unittest tests.test_output_layer`
   至少覆盖：
   - 同文档远距离强锚点可回收为同一 bundle
   - 跨文档无证据关联不误合并
@@ -74,9 +74,9 @@
   处理低信息评价类 state。它们不能独立成 bundle；只有能支撑工具选择、替代方案、偏好或决策上下文时才吸收，否则进入 omitted diagnostics。
 - Files likely touched:
   `layers/output_layer.py`
-  `test_output_layer.py`
+  `tests/test_output_layer.py`
 - Validation:
-  `python -m unittest test_output_layer.py`
+  `python -m unittest tests.test_output_layer`
   至少覆盖：
   - `高度认可WhisperDesktop：WhisperDesktop，伟大。` 不出现在正式 Markdown
   - 孤立短评价不独立成 bundle
@@ -90,10 +90,10 @@
   对齐可选 LLM narrative classifier。LLM 仍可输出内部 kind，但 renderer 不把 kind 变成可见硬分类；非法 JSON、非法 source id、硬补背景或不可兼容输出仍回退到 rule narrative。
 - Files likely touched:
   `layers/output_layer.py`
-  `test_output_layer.py`
+  `tests/test_output_layer.py`
   `docs/testing.md`，仅当验证命令或环境变量事实变化时更新。
 - Validation:
-  `python -m unittest test_output_layer.py`
+  `python -m unittest tests.test_output_layer`
   至少覆盖：
   - fake LLM 成功输出时仍使用平铺 Markdown
   - fake LLM 返回非法 source id 时回退
@@ -113,7 +113,7 @@
   `README.md`
 - Validation:
   后续实现阶段优先运行：
-  `python -m unittest test_output_layer.py`
+  `python -m unittest tests.test_output_layer`
   如实际生成输出，再运行：
   `python main.py --skip-extraction`
   `python main.py --stats`

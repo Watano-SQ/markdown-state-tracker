@@ -24,13 +24,13 @@ cp .env.example .env
 
 ```bash
 python main.py --help
-python -m unittest test_input_layer.py
-python test_extraction_schema.py
-python -m unittest test_aggregator.py
-python -m unittest test_middle_layer.py
-python -m unittest test_output_layer.py
-python -m unittest test_logging.py
-python test_font_filtering.py
+python -m unittest tests.test_input_layer
+python -m tests.test_extraction_schema
+python -m unittest tests.test_aggregator
+python -m unittest tests.test_middle_layer
+python -m unittest tests.test_output_layer
+python -m unittest tests.test_logging
+python -m tests.test_font_filtering
 python main.py --skip-extraction
 python main.py --stats
 ```
@@ -98,11 +98,11 @@ sqlite3 data/state.db "SELECT COUNT(*) FROM extractions;"
 
 - `--skip-extraction` 会创建或更新数据库与输出文件
 - 现有测试不依赖真实 API
-- 输入边界与来源类型改动应至少跑 `python -m unittest test_input_layer.py`
+- 输入边界与来源类型改动应至少跑 `python -m unittest tests.test_input_layer`
 - 在已有 `extractions` 的情况下，主流程会尝试聚合并生成 `states`
 - `output/status.md` 正式内容不应显示 `置信度:`、固定语义小节标题或 `summary：detail` 式事实句
 - 日志中应能看到 pipeline 和 extraction 事件
 
 ## 可选诊断脚本
 
-`test_config.py` 可以辅助排查环境配置，但它不是常规验证路径的一部分。
+`tests/test_config.py` 可以通过 `python -m tests.test_config` 辅助排查环境配置，但它不是常规验证路径的一部分。

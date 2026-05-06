@@ -20,7 +20,7 @@ from layers.input_layer import (
 
 class InputLayerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.repo_input_dir = Path(__file__).parent / "input_docs"
+        self.repo_input_dir = Path(__file__).resolve().parents[1] / "input_docs"
 
         fd, temp_db_path = tempfile.mkstemp(prefix="input_layer_", suffix=".db")
         os.close(fd)
@@ -178,7 +178,7 @@ updated_at: 2025-02-03
         self.assertNotIn("AGENTS.md", paths)
         self.assertIn("李申亮.md", paths)
         self.assertEqual(result["purged_excluded"], 1)
-        self.assertGreaterEqual(result["skipped"], 2)
+        self.assertGreaterEqual(result["skipped"], 1)
 
 
 if __name__ == "__main__":

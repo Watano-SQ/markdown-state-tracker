@@ -22,6 +22,7 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
 ENV/
 env/
 
@@ -35,6 +36,8 @@ env/
 
 # Project specific
 data/*
+tests/data/*
+input_layer_test_*/
 *.db
 *.db-journal
 

@@ -186,7 +186,7 @@ LLM narrative classifier 仍是可选输出整理器。
 - 无 evidence 或上下文不足的 state 不进入正式 Markdown。
 - 低信息评价类 state 不独立成 bundle；能支撑上下文时吸收，不能支撑时省略到诊断。
 - 不新增 SQLite schema，不运行 `python main.py --init`。
-- `python -m unittest test_output_layer.py` 覆盖平铺渲染、summary 非拼接、子条目无 summary 标签、弱标题过滤、低信息评价类处理和诊断。
+- `python -m unittest tests.test_output_layer` 覆盖平铺渲染、summary 非拼接、子条目无 summary 标签、弱标题过滤、低信息评价类处理和诊断。
 
 ## Reference Files
 
@@ -198,5 +198,5 @@ LLM narrative classifier 仍是可选输出整理器。
 - docs/archive/specs/contextual_bundle_narrative.md
 - docs/archive/plans/contextual_bundle_narrative.md
 - layers/output_layer.py
-- test_output_layer.py
+- tests/test_output_layer.py
 - output/status.md
