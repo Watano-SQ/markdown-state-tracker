@@ -19,6 +19,15 @@ Important current-state note: the repository now has a basic aggregation path fr
 
 Validation commands are maintained in [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md). Run the smallest relevant subset from that document for the task you are doing.
 
+Current minimum configured quality gate:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .
+```
+
+Default CI also runs the no-API test subset listed in `docs/testing.md`. This is a basic lint/test gate, not proof of business correctness, extraction quality, or field completeness.
+
 Use with care:
 
 ```bash
@@ -27,7 +36,7 @@ python main.py --init
 
 `--init` deletes and rebuilds the SQLite database.
 
-There is no repository-configured lint, typecheck, or CI command to claim by default. If that changes later, add it here.
+There is no repository-configured typecheck command to claim by default. If that changes later, add it here.
 
 ## Red Lines
 

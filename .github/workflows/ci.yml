@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: |
+          python main.py --help
+          python -m unittest tests.test_input_layer
+          python -m tests.test_extraction_schema
+          python -m unittest tests.test_aggregator
+          python -m unittest tests.test_middle_layer
+          python -m unittest tests.test_output_layer
+          python -m unittest tests.test_logging
+          python -m tests.test_font_filtering

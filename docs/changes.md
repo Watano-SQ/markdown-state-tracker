@@ -6,6 +6,37 @@
 
 ### 决策
 
+新增最低可用 lint/test/CI 事实源：Ruff 作为低摩擦 lint 门禁，GitHub Actions 运行无 API 的基础测试子集。
+
+- Decision:
+  - 新增 `pyproject.toml` 配置 Ruff，先采用低噪声规则集，主要拦截语法级失败和未定义名称
+  - 新增 `requirements-dev.txt`，当前只包含 `ruff`
+  - 新增 `.github/workflows/ci.yml`，在 push 和 pull_request 上使用 Python 3.11 运行 `ruff check .` 与无 API 测试命令
+  - `docs/testing.md` 区分本地快速验证、CI 默认验证、可选完整抽取验证和破坏性验证
+  - `AGENTS.md` 与 `docs/architecture.md` 从“没有 lint/CI 事实源”更新为“已有最低可用 lint/CI；仍没有默认 typecheck”
+- Why:
+  - 仓库需要一个基础质量门禁，避免语法级错误和无 API 测试回归进入主分支
+  - 当前目标是最低可用门禁，不是证明 extraction 质量、字段完备性或业务正确性
+  - 现有代码和测试没有类型标注完备性保证，直接引入严格 mypy/pyright 会把任务扩大成无关类型工程
+- Implemented:
+  - CI 安装 `requirements.txt` 和 `requirements-dev.txt`
+  - CI 运行 `ruff check .`、`python main.py --help`、现有 unittest/script 测试模块
+  - CI 默认不运行 `python main.py`、`python main.py --init`、`python main.py --skip-extraction` 或 `python main.py --stats`
+- Alternatives rejected:
+  - 引入 pre-commit、tox、nox、coverage、Docker、复杂矩阵或服务化 CI
+  - 把 `python main.py --init` 放入任何默认验证路径
+  - 把需要真实 API key 的完整 LLM 抽取放入默认 CI
+  - 现在加入严格 typecheck 并为通过它大规模改业务代码
+- Risk / debt accepted:
+  - Ruff 规则集故意保守，不代表全仓库已经完成风格清理
+  - CI 的无 API 测试只证明基础入口和当前测试集合可运行，不证明业务正确性或字段完备性
+  - `--skip-extraction` 和 `--stats` 留在本地快速验证，不进入默认 CI，以避免运行产物和样例状态差异影响最低门禁
+- Follow-up:
+  - 如果未来要扩大 lint 规则或引入 typecheck，应单独决策并避免一次性大规模格式化/类型重构
+  - 如果默认 CI 需要覆盖 `--skip-extraction` / `--stats`，应先确保运行产物、样例输入和数据库状态在 GitHub Actions 中稳定
+
+### 决策
+
 测试代码统一迁移到 `tests/` 目录，根目录不再直接放置 `test_*.py` 测试模块。
 
 - Decision:

@@ -12,11 +12,27 @@ conda activate markdown_tracker
 pip install -r requirements.txt
 ```
 
+如需运行 lint / CI 同款本地检查，再安装开发依赖：
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 如需跑 LLM 抽取，再配置：
 
 ```bash
 cp .env.example .env
 ```
+
+## Lint
+
+当前仓库的最低可用 lint 门禁是 Ruff：
+
+```bash
+ruff check .
+```
+
+Ruff 配置保持低摩擦，主要拦截语法级失败和未定义名称等基础问题；它不是格式化迁移，也不是完整业务正确性证明。
 
 ## 快速验证
 
@@ -24,6 +40,7 @@ cp .env.example .env
 
 ```bash
 python main.py --help
+ruff check .
 python -m unittest tests.test_input_layer
 python -m tests.test_extraction_schema
 python -m unittest tests.test_aggregator
@@ -42,6 +59,31 @@ python main.py --stats
 $env:OUTPUT_NARRATIVE_MODE="rule"
 python main.py --skip-extraction
 ```
+
+## CI 默认验证
+
+GitHub Actions 默认运行以下无 API 检查：
+
+```bash
+ruff check .
+python main.py --help
+python -m unittest tests.test_input_layer
+python -m tests.test_extraction_schema
+python -m unittest tests.test_aggregator
+python -m unittest tests.test_middle_layer
+python -m unittest tests.test_output_layer
+python -m unittest tests.test_logging
+python -m tests.test_font_filtering
+```
+
+CI 默认不运行：
+
+- `python main.py`
+- `python main.py --init`
+- `python main.py --skip-extraction`
+- `python main.py --stats`
+
+`--skip-extraction` 和 `--stats` 不要求真实 API，适合本地快速验证；但它们会创建或读取运行时数据库、日志和输出文件。为保持最低 CI 门禁稳定、无运行产物依赖，暂不放入默认 CI。
 
 ## 可选：完整抽取验证
 

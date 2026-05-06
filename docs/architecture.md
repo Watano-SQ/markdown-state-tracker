@@ -95,6 +95,10 @@
   - [test.sh](/D:/Apps/Python/lab/personal_prompt/test.sh)
 - 测试命令事实源：
   - [docs/testing.md](/D:/Apps/Python/lab/personal_prompt/docs/testing.md)
+- 最低质量门禁：
+  - `ruff check .`
+  - GitHub Actions workflow: `.github/workflows/ci.yml`
+  - 当前没有默认 typecheck 命令
 
 ## 依赖方向
 
@@ -166,6 +170,6 @@
 - LLM narrative 分类只是可选输出整理器，不是新的 extractor 或 aggregator；默认 rule 模式不需要真实 API
 - 未归组 state 当前只进入输出层返回值和日志诊断，不作为 `status.md` 的正式 `待澄清` 章节展示
 - 低信息评价类 state 不会独立构成正式 bundle；只有能支撑工具选择、偏好或决策上下文时才会被吸收到阅读视图
-- 仓库没有配置 lint/typecheck/CI 事实源
+- 仓库只有最低可用 Ruff lint 与 GitHub Actions CI；当前没有完整 typecheck 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认
 - 保留文档之间若出现冲突，当前默认以代码和本文件为准；更正式的权威顺序仍需要人类确认
