@@ -3,6 +3,7 @@
 """
 import sys
 import json
+import unittest
 from pathlib import Path
 
 # 确保可以导入 layers 模块
@@ -11,8 +12,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from layers.middle_layer import (
     ExtractionResult, ExtractionContext, TimeInfo,
-    Entity, Event, StateCandidate, RelationCandidate, RetrievalCandidate
+    Entity, Event, StateCandidate, RelationCandidate, RetrievalCandidate,
+    SourceContextBlock,
 )
+from layers.extractors.llm_extractor import LLMExtractor
 
 
 def test_basic_creation():
@@ -46,7 +49,17 @@ def test_with_data():
         document_author="Alice",
         document_time=doc_time,
         document_mode="personal",
-        section="技术学习"
+        section="技术学习",
+        source_context_blocks=[
+            SourceContextBlock(
+                source_block_id=10,
+                source_type="table_block",
+                section_label="技术学习",
+                text_preview="| 工具 | 用途 |",
+                start_offset=20,
+                end_offset=80,
+            )
+        ],
     )
     
     # 创建实体
@@ -120,6 +133,8 @@ def test_with_data():
     assert result.context.document_title == "2024年3月工作日志"
     assert result.context.document_author == "Alice"
     assert result.context.document_mode == "personal"
+    assert len(result.context.source_context_blocks) == 1
+    assert result.context.source_context_blocks[0].source_type == "table_block"
     assert result.state_candidates[0].subject_type == "person"
     assert result.state_candidates[0].subject_key == "Alice"
     assert result.state_candidates[0].canonical_summary == "学习 Rust 编程语言"
@@ -162,7 +177,18 @@ def test_from_dict():
                 "raw": None
             },
             "document_mode": "personal",
-            "section": "测试章节"
+            "section": "测试章节",
+            "source_context_blocks": [
+                {
+                    "source_block_id": 7,
+                    "source_type": "quote_material",
+                    "section_label": "测试章节",
+                    "text_preview": "引用上下文",
+                    "start_offset": 10,
+                    "end_offset": 20,
+                    "ignored_extra": "ok"
+                }
+            ],
         },
         "entities": [
             {
@@ -209,6 +235,9 @@ def test_from_dict():
     assert result.context.document_title == "测试文档"
     assert result.context.document_time.normalized == "2024-03"
     assert result.context.document_mode == "personal"
+    assert len(result.context.source_context_blocks) == 1
+    assert result.context.source_context_blocks[0].source_block_id == 7
+    assert result.context.source_context_blocks[0].source_type == "quote_material"
     assert len(result.entities) == 1
     assert result.entities[0].text == "Python"
     assert len(result.events) == 1
@@ -265,6 +294,79 @@ def test_time_source_values():
     print("[PASS] 时间来源值测试通过")
 
 
+def test_llm_extractor_preserves_canonical_context():
+    """测试 LLM 漏回或改写 context 时，保存代码侧 canonical context。"""
+    extractor = object.__new__(LLMExtractor)
+
+    def fake_call(_user_prompt, log_context=None):
+        return {
+            "context": {
+                "document_title": "LLM 改写标题",
+                "source_context_blocks": []
+            },
+            "entities": [],
+            "events": [],
+            "state_candidates": [],
+            "relation_candidates": [],
+            "retrieval_candidates": [],
+        }
+
+    extractor._call_llm_with_retry = fake_call
+    canonical_context = {
+        "document_title": "代码侧标题",
+        "document_author": "代码侧作者",
+        "chunk_position": "middle",
+        "section": "进展",
+        "source_context_blocks": [
+            {
+                "source_block_id": 42,
+                "source_type": "table_block",
+                "section_label": "进展",
+                "text_preview": "表格上下文",
+                "start_offset": 100,
+                "end_offset": 180,
+            }
+        ],
+    }
+
+    result = LLMExtractor.extract(
+        extractor,
+        "今天我完成了 canonical context 持久化。",
+        canonical_context,
+    )
+
+    assert result.context.document_title == "代码侧标题"
+    assert result.context.document_author == "代码侧作者"
+    assert len(result.context.source_context_blocks) == 1
+    assert result.context.source_context_blocks[0].source_block_id == 42
+    assert result.context.source_context_blocks[0].source_type == "table_block"
+
+    print("[PASS] canonical context 持久化测试通过")
+
+
+class ExtractionSchemaTests(unittest.TestCase):
+    def test_basic_creation(self):
+        test_basic_creation()
+
+    def test_with_data(self):
+        test_with_data()
+
+    def test_to_dict(self):
+        test_to_dict()
+
+    def test_from_dict(self):
+        test_from_dict()
+
+    def test_json_roundtrip(self):
+        test_json_roundtrip()
+
+    def test_time_source_values(self):
+        test_time_source_values()
+
+    def test_llm_extractor_preserves_canonical_context(self):
+        test_llm_extractor_preserves_canonical_context()
+
+
 if __name__ == "__main__":
     print("开始测试 ExtractionResult 新 schema...")
     print()
@@ -276,6 +378,7 @@ if __name__ == "__main__":
         test_from_dict()
         test_json_roundtrip()
         test_time_source_values()
+        test_llm_extractor_preserves_canonical_context()
         
         print()
         print("=" * 50)

@@ -120,6 +120,7 @@ class LLMExtractor:
         
         # 4. 后处理
         result_json = postprocess_result(result_json, preprocessed)
+        result_json = merge_canonical_context(result_json, context)
         
         # 5. 转换为 ExtractionResult
         result = ExtractionResult.from_dict(result_json)
@@ -337,3 +338,21 @@ def extract_from_chunk(
         _default_extractor = LLMExtractor()
     
     return _default_extractor.extract(text, context)
+
+
+def merge_canonical_context(
+    result_json: Dict[str, Any],
+    canonical_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Ensure persisted extraction JSON keeps code-side context fields.
+
+    The model may omit or rewrite context. LLM-observed fields are left intact,
+    but canonical context keys from the pipeline take precedence.
+    """
+    if not isinstance(result_json, dict):
+        result_json = {}
+    llm_context = result_json.get("context")
+    if not isinstance(llm_context, dict):
+        llm_context = {}
+    result_json["context"] = {**llm_context, **(canonical_context or {})}
+    return result_json

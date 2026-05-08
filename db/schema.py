@@ -155,4 +155,111 @@ CREATE INDEX IF NOT EXISTS idx_state_evidence_chunk_id ON state_evidence(chunk_i
 CREATE INDEX IF NOT EXISTS idx_state_evidence_extraction_id ON state_evidence(extraction_id);
 CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_type, target_id);
+
+-- 查询视图：文档 source block inventory
+CREATE VIEW IF NOT EXISTS v_source_block_inventory AS
+SELECT
+    d.id AS document_id,
+    d.path,
+    d.title,
+    sb.id AS source_block_id,
+    sb.block_index,
+    sb.source_type,
+    sb.include_decision,
+    sb.section_label,
+    sb.start_offset,
+    sb.end_offset,
+    substr(sb.text, 1, 160) AS text_preview
+FROM source_blocks sb
+JOIN documents d ON d.id = sb.document_id;
+
+-- 查询视图：chunk 正文来源链，只展示进入 chunk 的 extract source blocks
+CREATE VIEW IF NOT EXISTS v_chunk_source_trace AS
+SELECT
+    d.id AS document_id,
+    d.path,
+    c.id AS chunk_id,
+    c.chunk_index,
+    substr(c.text, 1, 160) AS chunk_text_preview,
+    sb.id AS source_block_id,
+    sb.block_index,
+    sb.source_type,
+    sb.include_decision,
+    substr(sb.text, 1, 160) AS source_text_preview
+FROM chunks c
+JOIN documents d ON d.id = c.document_id
+JOIN chunk_source_blocks csb ON csb.chunk_id = c.id
+JOIN source_blocks sb ON sb.id = csb.source_block_id
+WHERE sb.include_decision = 'extract';
+
+-- 查询视图：extraction 的正文 evidence 来源链
+CREATE VIEW IF NOT EXISTS v_extraction_source_trace AS
+SELECT
+    e.id AS extraction_id,
+    c.id AS chunk_id,
+    d.id AS document_id,
+    d.path,
+    c.chunk_index,
+    sb.id AS source_block_id,
+    sb.block_index,
+    sb.source_type,
+    sb.include_decision,
+    substr(sb.text, 1, 160) AS source_text_preview
+FROM extractions e
+JOIN chunks c ON c.id = e.chunk_id
+JOIN documents d ON d.id = c.document_id
+JOIN chunk_source_blocks csb ON csb.chunk_id = c.id
+JOIN source_blocks sb ON sb.id = csb.source_block_id
+WHERE sb.include_decision = 'extract';
+
+-- 查询视图：state 的正文证据链；不混入 context_only blocks
+CREATE VIEW IF NOT EXISTS v_state_source_trace AS
+SELECT
+    s.id AS state_id,
+    s.category,
+    s.subtype,
+    s.subject_type,
+    s.subject_key,
+    s.summary,
+    s.canonical_summary,
+    s.display_summary,
+    se.id AS evidence_id,
+    se.extraction_id,
+    c.id AS chunk_id,
+    d.id AS document_id,
+    d.path,
+    c.chunk_index,
+    sb.id AS source_block_id,
+    sb.block_index,
+    sb.source_type,
+    sb.include_decision,
+    substr(sb.text, 1, 160) AS source_text_preview
+FROM states s
+JOIN state_evidence se ON se.state_id = s.id
+JOIN chunks c ON c.id = se.chunk_id
+JOIN documents d ON d.id = c.document_id
+JOIN chunk_source_blocks csb ON csb.chunk_id = c.id
+JOIN source_blocks sb ON sb.id = csb.source_block_id
+WHERE sb.include_decision = 'extract';
+
+-- 查询视图：extraction 使用的 context_only source blocks（依赖 SQLite JSON1）
+CREATE VIEW IF NOT EXISTS v_extraction_context_trace AS
+SELECT
+    e.id AS extraction_id,
+    c.id AS chunk_id,
+    d.id AS document_id,
+    d.path,
+    sb.id AS context_source_block_id,
+    sb.block_index,
+    sb.source_type,
+    sb.include_decision,
+    sb.section_label,
+    substr(sb.text, 1, 160) AS context_text_preview
+FROM extractions e
+JOIN chunks c ON c.id = e.chunk_id
+JOIN documents d ON d.id = c.document_id
+JOIN json_each(e.extraction_json, '$.context.source_context_blocks') context_block
+JOIN source_blocks sb
+  ON sb.id = CAST(json_extract(context_block.value, '$.source_block_id') AS INTEGER)
+WHERE sb.include_decision = 'context_only';
 """

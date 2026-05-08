@@ -8,7 +8,14 @@ from pathlib import Path
 
 import db.connection as db_connection
 from db import close_connection, init_db
+from layers.middle_layer import (
+    ExtractionResult,
+    ensure_state_evidence,
+    save_extraction,
+    upsert_state,
+)
 from layers.input_layer import (
+    build_extraction_context_for_chunk,
     build_document_context,
     chunk_document,
     extract_document_context,
@@ -16,6 +23,9 @@ from layers.input_layer import (
     should_include_document_path,
     split_document_into_source_blocks,
 )
+
+
+SAMPLE_PATH = Path(__file__).parent / "fixtures" / "source_context_sample.md"
 
 
 class InputLayerTests(unittest.TestCase):
@@ -50,6 +60,9 @@ class InputLayerTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
+
+    def write_sample_doc(self, relative_path: str = "source_context_sample.md") -> Path:
+        return self.write_input_doc(relative_path, SAMPLE_PATH.read_text(encoding="utf-8"))
 
     def test_should_include_document_path_applies_explicit_rules(self) -> None:
         self.assertEqual(should_include_document_path("notes.md"), (True, None))
@@ -137,7 +150,7 @@ created_at: 2025-01-01
         )
         self.assertEqual(no_front_matter_context, {})
 
-    def test_chunk_document_keeps_author_narrative_and_table_but_excludes_context_only(self) -> None:
+    def test_chunk_document_keeps_author_narrative_but_excludes_context_only(self) -> None:
         content = """---
 title: Demo
 author: 测试者
@@ -163,37 +176,14 @@ author: 测试者
         chunk_text = "\n\n".join(chunk.text for chunk in chunks)
 
         self.assertIn("你可以把建议、步骤、配置先写下来", chunk_text)
-        self.assertIn("| 作者 | 事项 |", chunk_text)
+        self.assertNotIn("| 作者 | 事项 |", chunk_text)
         self.assertNotIn("title: Demo", chunk_text)
         self.assertNotIn("引用块只作为上下文", chunk_text)
         self.assertNotIn('{"tool": "demo"}', chunk_text)
         self.assertNotIn("example.com/demo.png", chunk_text)
 
     def test_process_input_persists_source_blocks_and_chunk_mappings(self) -> None:
-        self.write_input_doc(
-            "demo.md",
-            """---
-title: Demo
-author: 张三
----
-
-## 进展
-今天我完成了 SourceBlock 持久化。
-
-| 作者 | 事项 |
-|------|------|
-| 张三 | 表格事实也先进入 extraction |
-
-> 引用只作为上下文。
-
-```bash
-python main.py --help
-git status --short
-```
-
-![](https://example.com/demo.png)
-""",
-        )
+        self.write_sample_doc("demo.md")
         self.write_input_doc("AGENTS.md", "control file\n")
 
         result = process_input(self.temp_input_dir)
@@ -226,19 +216,133 @@ git status --short
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["skipped"], 1)
         self.assertEqual(decisions["front_matter"], "context_only")
-        self.assertEqual(decisions["table_block"], "extract")
+        self.assertEqual(decisions["table_block"], "context_only")
         self.assertEqual(decisions["quote_material"], "context_only")
         self.assertEqual(decisions["structured_dump"], "exclude")
         self.assertEqual(decisions["media_placeholder"], "exclude")
         self.assertIn("author_narrative", source_types)
-        self.assertIn("今天我完成了 SourceBlock 持久化", chunk_text)
-        self.assertIn("| 作者 | 事项 |", chunk_text)
-        self.assertNotIn("title: Demo", chunk_text)
-        self.assertNotIn("引用只作为上下文", chunk_text)
+        self.assertIn("今天我完成了 include_decision", chunk_text)
+        self.assertNotIn("| 作者 | 事项 |", chunk_text)
+        self.assertNotIn("title: Source Context Sample", chunk_text)
+        self.assertNotIn("这段引用提供背景", chunk_text)
         self.assertIn("author_narrative", mapped_source_types)
-        self.assertIn("table_block", mapped_source_types)
+        self.assertNotIn("table_block", mapped_source_types)
         self.assertNotIn("front_matter", mapped_source_types)
         self.assertEqual(len(mapping_rows), len(mapped_source_types))
+
+    def test_context_only_blocks_enter_extraction_context(self) -> None:
+        self.write_sample_doc()
+        process_input(self.temp_input_dir)
+
+        chunk_row = dict(
+            db_connection.get_connection()
+            .execute(
+                """
+                SELECT c.id, c.document_id, c.section_label, d.path, d.title
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                """
+            )
+            .fetchone()
+        )
+
+        context = build_extraction_context_for_chunk(chunk_row)
+        source_context_blocks = context["source_context_blocks"]
+        source_types = {block["source_type"] for block in source_context_blocks}
+        context_text = " ".join(block["text_preview"] for block in source_context_blocks)
+
+        self.assertEqual(context["document_title"], "Source Context Sample")
+        self.assertEqual(context["document_author"], "测试作者")
+        self.assertEqual(context["document_time"]["normalized"], "2026-05-08")
+        self.assertEqual(context["document_mode"], "personal")
+        self.assertEqual(context["section"], "进展")
+        self.assertIn("front_matter", source_types)
+        self.assertIn("table_block", source_types)
+        self.assertIn("quote_material", source_types)
+        self.assertNotIn("structured_dump", source_types)
+        self.assertNotIn("media_placeholder", source_types)
+        self.assertIn("表格作为上下文解释当前章节", context_text)
+        self.assertIn("这段引用提供背景", context_text)
+        self.assertLessEqual(len(source_context_blocks), 8)
+
+    def test_trace_views_separate_source_and_context_chains(self) -> None:
+        self.write_sample_doc()
+        process_input(self.temp_input_dir)
+        conn = db_connection.get_connection()
+        chunk_row = dict(
+            conn.execute(
+                """
+                SELECT c.id, c.document_id, c.section_label, d.path, d.title
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                """
+            ).fetchone()
+        )
+        context = build_extraction_context_for_chunk(chunk_row)
+        extraction = ExtractionResult.from_dict(
+            {
+                "context": context,
+                "entities": [],
+                "events": [],
+                "state_candidates": [],
+                "relation_candidates": [],
+                "retrieval_candidates": [],
+            }
+        )
+        extraction_id = save_extraction(
+            chunk_id=chunk_row["id"],
+            result=extraction,
+            extractor_type="test",
+            model_name="fake",
+            prompt_version="test",
+        )
+        state_id = upsert_state(
+            category="dynamic",
+            subtype="recent_event",
+            summary="完成 include_decision 语义收敛",
+            subject_type="person",
+            subject_key="测试作者",
+            canonical_summary="完成 include_decision 语义收敛",
+        )
+        ensure_state_evidence(
+            state_id=state_id,
+            chunk_id=chunk_row["id"],
+            extraction_id=extraction_id,
+        )
+
+        inventory_types = {
+            row["source_type"]
+            for row in conn.execute("SELECT source_type FROM v_source_block_inventory")
+        }
+        chunk_trace_types = {
+            row["source_type"]
+            for row in conn.execute("SELECT source_type FROM v_chunk_source_trace")
+        }
+        context_trace_types = {
+            row["source_type"]
+            for row in conn.execute("SELECT source_type FROM v_extraction_context_trace")
+        }
+        state_trace_types = {
+            row["source_type"]
+            for row in conn.execute("SELECT source_type FROM v_state_source_trace")
+        }
+
+        self.assertTrue(
+            {
+                "front_matter",
+                "author_narrative",
+                "table_block",
+                "quote_material",
+                "structured_dump",
+                "media_placeholder",
+            }.issubset(inventory_types)
+        )
+        self.assertEqual(chunk_trace_types, {"author_narrative"})
+        self.assertIn("front_matter", context_trace_types)
+        self.assertIn("table_block", context_trace_types)
+        self.assertIn("quote_material", context_trace_types)
+        self.assertNotIn("structured_dump", context_trace_types)
+        self.assertEqual(state_trace_types, {"author_narrative"})
 
     def test_build_document_context_reads_front_matter_only(self) -> None:
         self.write_input_doc(

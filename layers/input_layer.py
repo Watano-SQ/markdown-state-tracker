@@ -20,18 +20,21 @@ from db import get_connection
 
 logger = get_logger("input")
 
-INPUT_PROCESSING_VERSION = "input-v3-structural-source-blocks"
+INPUT_PROCESSING_VERSION = "input-v4-context-source-blocks"
 CONTROL_DOCUMENT_FILENAMES = {"agents.md"}
 EXCLUDED_DOCUMENT_PREFIXES = ("test_",)
 EXCLUDED_DIRECTORY_NAMES = {"tests", "fixtures", "validation"}
 INCLUDE_DECISIONS = {
     "author_narrative": "extract",
-    "table_block": "extract",
+    "table_block": "context_only",
     "front_matter": "context_only",
     "quote_material": "context_only",
     "structured_dump": "exclude",
     "media_placeholder": "exclude",
 }
+MAX_SOURCE_CONTEXT_BLOCKS = 8
+MAX_SOURCE_CONTEXT_PREVIEW_CHARS = 240
+MAX_SOURCE_CONTEXT_TOTAL_PREVIEW_CHARS = 1200
 
 @dataclass
 class DocumentInfo:
@@ -155,6 +158,10 @@ def extract_document_context(content: str, title: Optional[str] = None) -> Dict[
     if author:
         context['document_author'] = author
 
+    document_mode = metadata.get('document_mode') or metadata.get('mode') or metadata.get('文档模式')
+    if document_mode:
+        context['document_mode'] = document_mode
+
     time_key = next(
         (
             key for key in (
@@ -197,6 +204,152 @@ def build_document_context(relative_path: Optional[str], title: Optional[str] = 
 
     extracted_context = extract_document_context(content, title=title)
     return {**context, **extracted_context}
+
+
+def build_extraction_context_for_chunk(chunk_row: Dict[str, Any]) -> Dict[str, Any]:
+    """Build canonical extraction context for a pending chunk row.
+
+    extract blocks are represented by chunks.text. context_only blocks are
+    passed as bounded previews for interpretation, not as extraction text.
+    exclude blocks stay queryable in source_blocks but do not enter context.
+    """
+    conn = get_connection()
+    chunk_id = chunk_row.get('id') or chunk_row.get('chunk_id')
+    if chunk_id is None:
+        raise ValueError("chunk_row must include id or chunk_id")
+
+    cursor = conn.execute("""
+        SELECT c.id,
+               c.document_id,
+               c.chunk_index,
+               c.section_label,
+               d.path,
+               d.title
+        FROM chunks c
+        JOIN documents d ON d.id = c.document_id
+        WHERE c.id = ?
+    """, (chunk_id,))
+    db_chunk = cursor.fetchone()
+    if db_chunk is None:
+        raise ValueError(f"chunk not found: {chunk_id}")
+
+    path = chunk_row.get('path') or db_chunk['path']
+    title = chunk_row.get('title') or db_chunk['title']
+    section = chunk_row.get('section_label')
+    if section is None:
+        section = db_chunk['section_label']
+
+    context = {
+        **_build_document_context_from_source_blocks(
+            document_id=int(db_chunk['document_id']),
+            path=path,
+            title=title,
+        ),
+        'chunk_position': _calculate_chunk_position(
+            int(db_chunk['document_id']),
+            int(db_chunk['chunk_index']),
+        ),
+        'section': section,
+    }
+    source_context_blocks = _load_source_context_blocks(
+        document_id=int(db_chunk['document_id']),
+        section_label=section,
+    )
+    context['source_context_blocks'] = source_context_blocks
+    return context
+
+
+def _build_document_context_from_source_blocks(
+    *,
+    document_id: int,
+    path: Optional[str],
+    title: Optional[str],
+) -> Dict[str, Any]:
+    row = get_connection().execute("""
+        SELECT text
+        FROM source_blocks
+        WHERE document_id = ?
+          AND source_type = 'front_matter'
+        ORDER BY block_index
+        LIMIT 1
+    """, (document_id,)).fetchone()
+    if row is not None:
+        context: Dict[str, Any] = {}
+        if title:
+            context['document_title'] = title
+        return {**context, **extract_document_context(row['text'], title=title)}
+
+    return build_document_context(path, title=title)
+
+
+def _calculate_chunk_position(document_id: int, chunk_index: int) -> str:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT COUNT(*) AS count, MAX(chunk_index) AS max_index FROM chunks WHERE document_id = ?",
+        (document_id,),
+    ).fetchone()
+    if row is None or row['count'] <= 1:
+        return "middle"
+    if chunk_index == 0:
+        return "start"
+    if chunk_index == row['max_index']:
+        return "end"
+    return "middle"
+
+
+def _load_source_context_blocks(
+    *,
+    document_id: int,
+    section_label: Optional[str],
+) -> List[Dict[str, Any]]:
+    rows = get_connection().execute("""
+        SELECT id,
+               source_type,
+               section_label,
+               text,
+               start_offset,
+               end_offset,
+               block_index
+        FROM source_blocks
+        WHERE document_id = ?
+          AND include_decision = 'context_only'
+        ORDER BY
+            CASE WHEN source_type = 'front_matter' THEN 0 ELSE 1 END,
+            block_index
+    """, (document_id,)).fetchall()
+
+    selected: List[Dict[str, Any]] = []
+    total_preview_chars = 0
+    for row in rows:
+        source_type = row['source_type']
+        row_section = row['section_label']
+        if source_type != 'front_matter' and section_label and row_section != section_label:
+            continue
+
+        preview = _truncate_source_context_preview(row['text'])
+        if total_preview_chars + len(preview) > MAX_SOURCE_CONTEXT_TOTAL_PREVIEW_CHARS:
+            break
+
+        selected.append({
+            'source_block_id': row['id'],
+            'source_type': source_type,
+            'section_label': row_section,
+            'text_preview': preview,
+            'start_offset': row['start_offset'],
+            'end_offset': row['end_offset'],
+        })
+        total_preview_chars += len(preview)
+        if len(selected) >= MAX_SOURCE_CONTEXT_BLOCKS:
+            break
+
+    return selected
+
+
+def _truncate_source_context_preview(text: str) -> str:
+    normalized = re.sub(r'\s+', ' ', text).strip()
+    if len(normalized) <= MAX_SOURCE_CONTEXT_PREVIEW_CHARS:
+        return normalized
+    return normalized[:MAX_SOURCE_CONTEXT_PREVIEW_CHARS - 3].rstrip() + "..."
 
 
 def extract_title(content: str, filepath: Path) -> str:

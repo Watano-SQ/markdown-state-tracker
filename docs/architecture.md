@@ -40,6 +40,7 @@
   - 变更检测
   - 结构优先的 `SourceBlock` 分类：`front_matter`、`table_block`、`quote_material`、`structured_dump`、`media_placeholder`、`author_narrative`
   - `source_blocks`、`chunks`、`chunk_source_blocks` 落库
+  - 从 `source_blocks.include_decision = context_only` 构造 chunk 级 `source_context_blocks`，写入 `extraction_json.context`
   - 普通正文默认 `author_narrative -> extract`；不再用 `external_material` 语义启发式按“你/建议/步骤/配置”等词排除正文
 - [layers/middle_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/middle_layer.py)
   - `ExtractionResult` 相关 dataclass
@@ -143,7 +144,9 @@
   - front matter 不进入正文 chunk，但会作为 `source_blocks.include_decision = context_only` 持久化
   - 普通正文和普通表格中的“作者/标题”等词不再被当作文档 metadata
   - 当前只从真正 front matter 提炼标题、作者、文档时间作为抽取上下文
-  - quote block 当前 `context_only`；structured dump 与 media placeholder 当前 `exclude`
+  - table block 与 quote block 当前 `context_only`；structured dump 与 media placeholder 当前 `exclude`
+  - `context_only` 块不会拼入 `chunks.text`，而是以最多 8 个、单项最多 240 字符、总预览约 1200 字符的 `source_context_blocks` 进入 `ExtractionContext`
+  - `LLMExtractor` 会用代码侧 canonical context 覆盖模型返回的 context，确保 `source_context_blocks` 稳定写入 `extraction_json.context`
 - `config.py`
   - 导入即创建目录，存在副作用
 
@@ -166,8 +169,9 @@
 - `documents.status` 只有最小完成语义：所有 chunk 都有 extraction 后才能变为 `processed`
 - 失败 chunk 可通过 pending 队列重新进入抽取，但完整失败状态机、错误持久化与重试策略仍未设计
 - `retrieval_candidates` 已接入 pending 候选池；`relation_candidates` 仍未接入 pending 持久化链路，也不会直接写入正式 `relations`
-- 非正文 context-only 块已有 `source_blocks` 持久化，但抽取层尚未消费完整 context-only 块内容
-- `table_block` 当前默认进入 extraction，避免误删表格中的项目事实；后续仍需观察是否需要更细的 table 准入策略
+- 非正文 context-only 块已有 `source_blocks` 持久化，并会作为 bounded preview 进入 extraction context；抽取层不得仅根据这些上下文材料生成 observation
+- `table_block` 当前默认不进入 `chunks.text`，只作为 `context_only` 辅助当前 chunk 解释；后续仍需观察是否需要更细的 table 准入策略
+- 查询视图已分开正文证据链和上下文链：`v_chunk_source_trace` / `v_extraction_source_trace` / `v_state_source_trace` 追踪 extract blocks，`v_extraction_context_trace` 追踪 context_only blocks
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱
 - `ContextBundle` / `CandidateTopicBundle` / `BundleNarrative` 当前都只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式

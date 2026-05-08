@@ -32,7 +32,17 @@ JSON_SCHEMA = """{
     "document_author": "文档作者线索（可选，不等同于状态主体）",
     "document_time": {"normalized": "文档默认时间（可选）", "source": "document_context", "raw": "原始时间（可选）"},
     "document_mode": "personal|team|hybrid（可选，文档解释模式）",
-    "section": "所属章节标题（可选）"
+    "section": "所属章节标题（可选）",
+    "source_context_blocks": [
+      {
+        "source_block_id": "context_only source block id（可选）",
+        "source_type": "front_matter|table_block|quote_material（可选）",
+        "section_label": "来源块所属章节（可选）",
+        "text_preview": "上下文材料预览（可选，不是待抽取正文）",
+        "start_offset": "来源块起始 offset（可选）",
+        "end_offset": "来源块结束 offset（可选）"
+      }
+    ]
   },
   "entities": [
     {
@@ -166,6 +176,8 @@ def build_user_prompt(
         context_parts.append(f"- 所属章节: {context['section']}")
     
     context_str = '\n'.join(context_parts) if context_parts else "无额外上下文"
+    source_context_blocks = context.get('source_context_blocks') or []
+    source_context_str = _format_source_context_blocks(source_context_blocks)
     
     # 构建提示部分
     hints_str = ""
@@ -185,6 +197,9 @@ def build_user_prompt(
 
 【文档上下文】
 {context_str}
+
+【上下文材料（不是待抽取正文）】
+{source_context_str}
 {hints_str}
 
 【输出格式要求】
@@ -203,7 +218,10 @@ def build_user_prompt(
 2. 如果某类信息不存在，返回空数组 []
 3. 检索候选（retrieval_candidates）用于标记缩写、代称、模糊指代等需要进一步明确的对象
 4. 时间的 source 字段必填，normalized 字段尽量填写（如果能推断出具体或大致时间）
-5. state_candidate 的 subject_type 必填；subject_type 不是 unknown 时，subject_key 必填"""
+5. state_candidate 的 subject_type 必填；subject_type 不是 unknown 时，subject_key 必填
+6. 待分析文本是唯一 observation source；source_context_blocks 只用于解释当前 chunk
+7. 不要仅根据 source_context_blocks 生成 entities/events/state_candidates
+8. 只有待分析文本中有对应叙述时，context_only 材料才可用于消歧、补充解释或辅助主体/主题判断"""
 
 
 def _format_document_time(document_time: Any) -> str:
@@ -222,3 +240,23 @@ def _format_document_time(document_time: Any) -> str:
         return " / ".join(parts) if parts else str(document_time)
 
     return str(document_time)
+
+
+def _format_source_context_blocks(source_context_blocks: Any) -> str:
+    if not isinstance(source_context_blocks, list) or not source_context_blocks:
+        return "无"
+
+    lines = []
+    for block in source_context_blocks:
+        if not isinstance(block, dict):
+            continue
+        source_block_id = block.get('source_block_id')
+        source_type = block.get('source_type')
+        section_label = block.get('section_label') or "无章节"
+        text_preview = block.get('text_preview') or ""
+        lines.append(
+            f"- source_block_id={source_block_id}, type={source_type}, "
+            f"section={section_label}: {text_preview}"
+        )
+
+    return "\n".join(lines) if lines else "无"

@@ -134,6 +134,17 @@ class RetrievalCandidate:
 
 
 @dataclass
+class SourceContextBlock:
+    """context_only source block passed alongside chunk extraction context."""
+    source_block_id: int
+    source_type: str
+    section_label: Optional[str] = None
+    text_preview: Optional[str] = None
+    start_offset: Optional[int] = None
+    end_offset: Optional[int] = None
+
+
+@dataclass
 class ExtractionContext:
     """抽取上下文信息
     
@@ -144,6 +155,7 @@ class ExtractionContext:
         document_time: 文档默认时间上下文（可选）
         document_mode: 文档解释模式（personal/team/hybrid，可选）
         section: 所属章节（可选）
+        source_context_blocks: context_only 来源块预览（可选）
     """
     chunk_position: Optional[str] = None  # start | middle | end
     document_title: Optional[str] = None
@@ -151,6 +163,7 @@ class ExtractionContext:
     document_time: Optional[TimeInfo] = None
     document_mode: Optional[str] = None
     section: Optional[str] = None
+    source_context_blocks: List[SourceContextBlock] = field(default_factory=list)
 
 
 @dataclass
@@ -182,11 +195,29 @@ class ExtractionResult:
     def from_dict(cls, data: Dict[str, Any]) -> 'ExtractionResult':
         """从字典创建（带类型转换）"""
         # 转换上下文对象（包括嵌套的 TimeInfo）
-        context_data = data.get('context', {})
+        raw_context_data = data.get('context', {})
+        context_data = dict(raw_context_data) if isinstance(raw_context_data, dict) else {}
         if context_data:
             doc_time_data = context_data.get('document_time')
             if doc_time_data and isinstance(doc_time_data, dict):
                 context_data['document_time'] = TimeInfo(**doc_time_data)
+            source_context_blocks = []
+            for block_data in context_data.get('source_context_blocks') or []:
+                if isinstance(block_data, dict):
+                    allowed_block_keys = SourceContextBlock.__dataclass_fields__.keys()
+                    filtered_block_data = {
+                        key: value
+                        for key, value in block_data.items()
+                        if key in allowed_block_keys
+                    }
+                    source_context_blocks.append(SourceContextBlock(**filtered_block_data))
+            context_data['source_context_blocks'] = source_context_blocks
+            allowed_context_keys = ExtractionContext.__dataclass_fields__.keys()
+            context_data = {
+                key: value
+                for key, value in context_data.items()
+                if key in allowed_context_keys
+            }
             context = ExtractionContext(**context_data)
         else:
             context = ExtractionContext()

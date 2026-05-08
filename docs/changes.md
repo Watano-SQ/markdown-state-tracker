@@ -6,6 +6,37 @@
 
 ### 决策
 
+`include_decision=context_only` 正式接入 chunk extraction context，并用查询视图区分正文证据链与上下文链。
+
+- Decision:
+  - `include_decision` 长期语义固定为：`extract` 进入 `chunks.text`；`context_only` 不进入正文 chunk、但进入 `ExtractionContext.source_context_blocks`；`exclude` 只留在 `source_blocks` 中供审计
+  - `table_block` 从 `extract` 调整为 `context_only`
+  - `ExtractionContext` 新增 `source_context_blocks`，保存 bounded context-only source block preview
+  - `main.run_extraction()` 改为通过 `build_extraction_context_for_chunk()` 构造 canonical context
+  - `LLMExtractor` 在后处理后用代码侧 canonical context 覆盖模型返回的 context，确保 `extraction_json.context` 稳定保留 `source_context_blocks`
+  - 新增查询视图：`v_source_block_inventory`、`v_chunk_source_trace`、`v_extraction_source_trace`、`v_state_source_trace`、`v_extraction_context_trace`
+- Why:
+  - source block 持久化后，需要让 context-only 材料有明确下游命运，而不是只停留在审计表
+  - 表格常可解释当前章节，但直接进入 chunk text 容易被当作作者正文事实抽取；先作为 context-only 更保守
+  - 正文 evidence chain 和 context chain 必须可分开查询，避免把上下文材料混入 state evidence
+- Implemented:
+  - `front_matter/table_block/quote_material -> context_only`
+  - `structured_dump/media_placeholder -> exclude`
+  - context-only block 选择限制为最多 8 个，单项 preview 最多 240 字符，总 preview 约 1200 字符
+  - prompt 明确 `source_context_blocks` 是上下文材料，不是待抽取正文；不能仅根据 context-only 生成 entities/events/state_candidates
+  - 测试覆盖 table/quote/front matter context-only、exclude 策略、canonical context 持久化和 SQL views
+- Alternatives rejected:
+  - 恢复 `external_material` 语义启发式
+  - 把 table block 继续作为 extraction 正文
+  - 把 context-only blocks 混入 `state_evidence` 正文证据链
+  - 本轮改 aggregator、output layer 或 relation persistence
+- Risk / debt accepted:
+  - `v_extraction_context_trace` 依赖 SQLite JSON1
+  - front matter 同时提供 document_title/document_author/document_time，并作为 source_context_blocks 进入 context；后续可观察是否冗余
+  - context-only preview 是有界摘要，不是完整上下文消费模型
+
+### 决策
+
 输入层 `SourceBlock` 改为结构优先的可持久化表征，并移除 `external_material` 语义启发式排除路径。
 
 - Decision:
@@ -13,7 +44,7 @@
   - 新增 `chunk_source_blocks` 表，记录每个 chunk 来自哪些 source block，以及在 chunk 内的顺序和片段 offset/hash
   - source type 收敛为结构事实：`front_matter`、`table_block`、`quote_material`、`structured_dump`、`media_placeholder`、`author_narrative`
   - 普通正文默认 `author_narrative -> extract`
-  - `front_matter -> context_only`，`table_block -> extract`，`quote_material -> context_only`，`structured_dump/media_placeholder -> exclude`
+  - 初始落地时 `table_block -> extract`；该策略已被上方同日决策调整为 `table_block -> context_only`
   - `extract_document_context()` 只从真正 front matter 提取 title/author/time，不再从正文段落或普通表格推断当前文档 metadata
 - Why:
   - PBL 和项目材料中经常出现 GPT/Codex 建议、讨论、读书叙述和反思材料，按“你/建议/步骤/配置”等词排除会误删有效正文
@@ -28,11 +59,11 @@
   - 根据普通正文中的“作者/标题”或表格列名自动识别 document metadata
   - 本轮新增 `decision_reason` 字段或完整上下文消费模型
 - Risk / debt accepted:
-  - `table_block` 当前默认进入 extraction，可能增加表格噪音，但优先避免误删项目事实
+  - 初始 `table_block -> extract` 策略已被后续同日决策取代
   - `quote_material` 当前只作为 context-only 持久化，不进入 extraction；后续若要消费引用上下文，需要单独定义
   - 长 SourceBlock 拆分时 fragment offset 采用保守字符串长度推进，未做复杂 whitespace/span 重建
 - Follow-up:
-  - 观察真实运行后 table block 对 extraction 质量的影响
+  - 观察真实运行后 table block 作为 context-only 对 extraction 消歧质量的影响
   - 后续如需让 context-only 块参与抽取上下文，应先定义明确消费边界和测试
 
 
