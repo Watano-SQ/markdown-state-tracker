@@ -6,6 +6,44 @@
 
 ### 决策
 
+新增 Observation IR -> StateCandidate grounding audit 只读诊断能力。
+
+- Decision:
+  - 增强 `tools/observation_support_audit.py`，从基础 overlap 检查升级为覆盖 7 个维度的完整 grounding diagnosis
+  - 每个 `state_candidate` 生成 9 个诊断组：candidate_info、subject_grounding、text_grounding、event_grounding、relation_grounding、retrieval_grounding、context_grounding、overall_grounding、admission_cross_check
+  - 总体 grounding 等级：strong / medium / weak / risky / inconsistent
+  - 准入对照：aligned_accept / aligned_reject / possible_false_accept / possible_false_reject / missing_admission_record
+  - 输出支持 `--json`、`--markdown` 和默认文本三种模式
+  - 新增 `tests/test_grounding_audit.py`，覆盖 39 个测试，包括 5 类 fixture cases（强支撑、context_only_only、document_author 主体、event mismatch、retrieval ambiguity）
+- Why:
+  - `state_candidate_supports` 只记录 accept/reject，不解释 candidate 如何从 Observation IR 形成
+  - `state_evidence` 只连接 accepted state 到 chunk，不解释 candidate 内部的 observation 支撑结构
+  - 需要在决定修改 prompt/aggregator/schema 之前，先看清每个 candidate 的 grounding 情况
+- Implemented:
+  - `tools/observation_support_audit.py` 完全重写（~700 行），保持独立只读、不导入项目 pipeline 模块
+  - 所有判断使用轻量词面策略（substring、keyword overlap、CJK bigram），不引入 embedding/LLM
+  - `tools/__init__.py` 新增，使 audit 模块可被测试导入
+  - 测试覆盖所有 audit 维度和 admission cross-check 逻辑
+- Alternatives rejected:
+  - 继续使用旧版基础 overlap 检查
+  - 引入 embedding / LLM 二次判别 / 复杂 NLP
+  - 把 audit 结果写入 states/state_evidence
+  - 修改 aggregator 准入逻辑或 output layer
+  - 新增正式 relation persistence / retrieval lifecycle
+- Risk / debt accepted:
+  - 所有 grounding 判断均为轻量词面规则，不证明 extraction 质量或 state 事实正确性
+  - audit 是只读诊断，不改变 pipeline 语义
+  - 词面策略对 paraphrase 和含蓄表达的敏感度有限
+  - 不保证 audit 结果与人类判断完全一致
+- Follow-up:
+  - 若大量 accepted candidates grounding 为 weak/risky，考虑增强 admission 规则
+  - 若大量 rejected candidates grounding 为 strong/medium，考虑修正 reject 规则
+  - 若 relation_candidates 经常能解释 candidate 但完全闲置，考虑 relation support 或 persistence
+  - 若 retrieval ambiguity 经常影响 subject/object，考虑 retrieval lifecycle
+  - 若 context_only 经常污染 candidate，调整 prompt 或 admission
+
+### 决策
+
 新增 `state_candidate_supports` 作为 state candidate 晋升前的准入记录层，不替代 `state_evidence`。
 
 - Decision:
