@@ -96,6 +96,7 @@ python main.py
 重点验证：
 
 - chunk 被处理
+- `source_blocks` 与 `chunk_source_blocks` 已生成，可追溯 chunk 来源
 - 抽取日志写入成功
 - `extractions` 表中出现记录
 - `states` 表中出现聚合结果
@@ -141,6 +142,7 @@ sqlite3 data/state.db "SELECT COUNT(*) FROM extractions;"
 - `--skip-extraction` 会创建或更新数据库与输出文件
 - 现有测试不依赖真实 API
 - 输入边界与来源类型改动应至少跑 `python -m unittest tests.test_input_layer`
+- 输入层应持久化 `source_blocks` / `chunk_source_blocks`；`--skip-extraction` 也应完成这一步
 - 在已有 `extractions` 的情况下，主流程会尝试聚合并生成 `states`
 - `output/status.md` 正式内容不应显示 `置信度:`、固定语义小节标题或 `summary：detail` 式事实句
 - 日志中应能看到 pipeline 和 extraction 事件

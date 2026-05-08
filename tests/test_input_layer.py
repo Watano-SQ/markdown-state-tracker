@@ -1,5 +1,5 @@
 """
-Tests for input-layer inclusion rules and source-aware chunking.
+Tests for input-layer inclusion rules, structural source blocks, and chunk provenance.
 """
 import os
 import tempfile
@@ -20,12 +20,13 @@ from layers.input_layer import (
 
 class InputLayerTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.repo_input_dir = Path(__file__).resolve().parents[1] / "input_docs"
-
         fd, temp_db_path = tempfile.mkstemp(prefix="input_layer_", suffix=".db")
         os.close(fd)
         self.temp_db_path = Path(temp_db_path)
         self.original_db_path = db_connection.DB_PATH
+
+        self.temp_input_dir = Path(tempfile.mkdtemp(prefix="input_docs_"))
+        self.addCleanup(self._cleanup_temp_input_dir)
 
         close_connection()
         db_connection.DB_PATH = self.temp_db_path
@@ -36,6 +37,20 @@ class InputLayerTests(unittest.TestCase):
         db_connection.DB_PATH = self.original_db_path
         self.temp_db_path.unlink(missing_ok=True)
 
+    def _cleanup_temp_input_dir(self) -> None:
+        for path in sorted(self.temp_input_dir.rglob("*"), reverse=True):
+            if path.is_file():
+                path.unlink(missing_ok=True)
+            elif path.is_dir():
+                path.rmdir()
+        self.temp_input_dir.rmdir()
+
+    def write_input_doc(self, relative_path: str, content: str) -> Path:
+        path = self.temp_input_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
     def test_should_include_document_path_applies_explicit_rules(self) -> None:
         self.assertEqual(should_include_document_path("notes.md"), (True, None))
         self.assertEqual(should_include_document_path("AGENTS.md"), (False, "control_file"))
@@ -45,108 +60,207 @@ class InputLayerTests(unittest.TestCase):
             (False, "fixture_directory"),
         )
 
-    def test_source_blocks_and_chunks_skip_non_author_content(self) -> None:
+    def test_structural_source_block_classification(self) -> None:
         content = """---
 title: Demo
 author: 测试者
+updated_at: 2025-01-02
 ---
 
-| 作者 | 创建时间 | 更新时间 |
-|------|----------|----------|
-| 测试者 | 2025-01-01 | 2025-01-02 |
-
 ## 复盘
-今天我修好了部署问题，并记录了原因。
+作者：陀思妥耶夫斯基
+标题：卡拉马佐夫兄弟读书笔记
 
-> Q：这个问题为什么出现？
-> A：因为引用块不应进入作者正文抽取。
+你可以先记录建议、步骤和配置，再决定是否采纳。
 
-您可以先安装依赖，再配置环境变量。
+| 作者 | 观点 |
+|------|------|
+| 张三 | 表格里也可能是项目事实 |
+
+> 引用材料不应被当作作者正文抽取。
 
 ```bash
-sudo apt update
-sudo apt upgrade -y
+python main.py --help
+git status --short
 ```
+
+{"kind": "structured"}
 
 ![](https://example.com/demo.png)
 
-我还补上了下一步计划。
+---
 """
 
         blocks = split_document_into_source_blocks(content)
         source_types = [block.source_type for block in blocks]
 
-        self.assertIn("document_metadata", source_types)
-        self.assertIn("metadata_table", source_types)
+        self.assertEqual(blocks[0].source_type, "front_matter")
+        self.assertEqual(blocks[0].include_decision, "context_only")
+        self.assertIn("table_block", source_types)
         self.assertIn("quote_material", source_types)
-        self.assertIn("external_material", source_types)
         self.assertIn("structured_dump", source_types)
         self.assertIn("media_placeholder", source_types)
+        self.assertNotIn("external_material", source_types)
+        self.assertNotIn("metadata_table", source_types)
+        self.assertNotIn("document_metadata", source_types)
 
-        chunks = chunk_document(content, max_tokens=200)
+        narrative_blocks = [
+            block for block in blocks if block.source_type == "author_narrative"
+        ]
+        self.assertGreaterEqual(len(narrative_blocks), 2)
+        self.assertTrue(any("作者：陀思妥耶夫斯基" in block.text for block in narrative_blocks))
+        self.assertTrue(any("你可以先记录建议" in block.text for block in narrative_blocks))
 
-        self.assertEqual(len(chunks), 2)
-        self.assertTrue(all(chunk.section_label == "复盘" for chunk in chunks))
-        self.assertIn("今天我修好了部署问题", chunks[0].text)
-        self.assertIn("我还补上了下一步计划", chunks[1].text)
-        self.assertNotIn("Q：", chunks[0].text + chunks[1].text)
-        self.assertNotIn("您可以先安装依赖", chunks[0].text + chunks[1].text)
-        self.assertNotIn("sudo apt update", chunks[0].text + chunks[1].text)
-        self.assertNotIn("作者 | 创建时间", chunks[0].text + chunks[1].text)
-
-    def test_extract_document_context_uses_front_matter_and_metadata_table(self) -> None:
+    def test_extract_document_context_only_uses_front_matter(self) -> None:
         content = """---
 title: Front Matter Title
 author: Front Matter Author
 created_at: 2025-01-01
 ---
 
-| 作者 | 创建时间 | 更新时间 |
-|------|----------|----------|
-| Table Author | 2025-01-02 | 2025-01-03 |
+| 作者 | 更新时间 |
+|------|----------|
+| Table Author | 2025-01-03 |
 
-## 复盘
-今天我继续推进项目。
+作者：正文作者
+标题：正文标题
 """
 
         context = extract_document_context(content)
 
         self.assertEqual(context["document_title"], "Front Matter Title")
         self.assertEqual(context["document_author"], "Front Matter Author")
-        self.assertEqual(
-            context["document_time"],
-            {
-                "normalized": "2025-01-03",
-                "source": "document_context",
-                "raw": "2025-01-03",
-            },
-        )
+        self.assertEqual(context["document_time"]["normalized"], "2025-01-01")
 
-    def test_build_document_context_reads_current_document_without_chunking_metadata(self) -> None:
-        base_dir = Path(__file__).parent / "data"
-        base_dir.mkdir(parents=True, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix="input_context_", suffix=".md", dir=base_dir)
-        temp_file = Path(temp_path)
-        self.addCleanup(lambda: temp_file.unlink(missing_ok=True))
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(
-                """---
+        no_front_matter_context = extract_document_context(
+            "作者：陀思妥耶夫斯基\n标题：读书笔记\n"
+        )
+        self.assertEqual(no_front_matter_context, {})
+
+    def test_chunk_document_keeps_author_narrative_and_table_but_excludes_context_only(self) -> None:
+        content = """---
+title: Demo
+author: 测试者
+---
+
+## 复盘
+你可以把建议、步骤、配置先写下来，然后我再判断是否采用。
+
+| 作者 | 事项 |
+|------|------|
+| 张三 | 推进输入层持久化 |
+
+> 引用块只作为上下文。
+
+```json
+{"tool": "demo"}
+```
+
+![](https://example.com/demo.png)
+"""
+
+        chunks = chunk_document(content, max_tokens=200)
+        chunk_text = "\n\n".join(chunk.text for chunk in chunks)
+
+        self.assertIn("你可以把建议、步骤、配置先写下来", chunk_text)
+        self.assertIn("| 作者 | 事项 |", chunk_text)
+        self.assertNotIn("title: Demo", chunk_text)
+        self.assertNotIn("引用块只作为上下文", chunk_text)
+        self.assertNotIn('{"tool": "demo"}', chunk_text)
+        self.assertNotIn("example.com/demo.png", chunk_text)
+
+    def test_process_input_persists_source_blocks_and_chunk_mappings(self) -> None:
+        self.write_input_doc(
+            "demo.md",
+            """---
+title: Demo
+author: 张三
+---
+
+## 进展
+今天我完成了 SourceBlock 持久化。
+
+| 作者 | 事项 |
+|------|------|
+| 张三 | 表格事实也先进入 extraction |
+
+> 引用只作为上下文。
+
+```bash
+python main.py --help
+git status --short
+```
+
+![](https://example.com/demo.png)
+""",
+        )
+        self.write_input_doc("AGENTS.md", "control file\n")
+
+        result = process_input(self.temp_input_dir)
+
+        conn = db_connection.get_connection()
+        source_rows = conn.execute(
+            """
+            SELECT source_type, include_decision, text
+            FROM source_blocks
+            ORDER BY block_index
+            """
+        ).fetchall()
+        chunk_rows = conn.execute(
+            "SELECT id, text FROM chunks ORDER BY chunk_index"
+        ).fetchall()
+        mapping_rows = conn.execute(
+            """
+            SELECT csb.chunk_id, sb.source_type, csb.order_in_chunk
+            FROM chunk_source_blocks csb
+            JOIN source_blocks sb ON sb.id = csb.source_block_id
+            ORDER BY csb.chunk_id, csb.order_in_chunk
+            """
+        ).fetchall()
+
+        decisions = {row["source_type"]: row["include_decision"] for row in source_rows}
+        source_types = [row["source_type"] for row in source_rows]
+        chunk_text = "\n\n".join(row["text"] for row in chunk_rows)
+        mapped_source_types = [row["source_type"] for row in mapping_rows]
+
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["skipped"], 1)
+        self.assertEqual(decisions["front_matter"], "context_only")
+        self.assertEqual(decisions["table_block"], "extract")
+        self.assertEqual(decisions["quote_material"], "context_only")
+        self.assertEqual(decisions["structured_dump"], "exclude")
+        self.assertEqual(decisions["media_placeholder"], "exclude")
+        self.assertIn("author_narrative", source_types)
+        self.assertIn("今天我完成了 SourceBlock 持久化", chunk_text)
+        self.assertIn("| 作者 | 事项 |", chunk_text)
+        self.assertNotIn("title: Demo", chunk_text)
+        self.assertNotIn("引用只作为上下文", chunk_text)
+        self.assertIn("author_narrative", mapped_source_types)
+        self.assertIn("table_block", mapped_source_types)
+        self.assertNotIn("front_matter", mapped_source_types)
+        self.assertEqual(len(mapping_rows), len(mapped_source_types))
+
+    def test_build_document_context_reads_front_matter_only(self) -> None:
+        self.write_input_doc(
+            "context.md",
+            """---
 title: Demo Context
 author: Demo Author
 updated_at: 2025-02-03
 ---
 
 我记录一个正文状态。
-"""
-            )
+""",
+        )
 
-        context = build_document_context(temp_file.name, input_dir=base_dir)
+        context = build_document_context("context.md", input_dir=self.temp_input_dir)
 
         self.assertEqual(context["document_title"], "Demo Context")
         self.assertEqual(context["document_author"], "Demo Author")
         self.assertEqual(context["document_time"]["normalized"], "2025-02-03")
 
     def test_process_input_purges_excluded_documents_from_db(self) -> None:
+        self.write_input_doc("notes.md", "我记录一个正文状态。\n")
         conn = db_connection.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -166,7 +280,7 @@ updated_at: 2025-02-03
         )
         conn.commit()
 
-        result = process_input(self.repo_input_dir)
+        result = process_input(self.temp_input_dir)
 
         paths = [
             row["path"]
@@ -176,9 +290,8 @@ updated_at: 2025-02-03
         ]
 
         self.assertNotIn("AGENTS.md", paths)
-        self.assertIn("李申亮.md", paths)
+        self.assertIn("notes.md", paths)
         self.assertEqual(result["purged_excluded"], 1)
-        self.assertGreaterEqual(result["skipped"], 1)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,40 @@
 >本文档应当按照日期倒序来写，也即最新日期在前。
 
 
+## 2026-05-08
+
+### 决策
+
+输入层 `SourceBlock` 改为结构优先的可持久化表征，并移除 `external_material` 语义启发式排除路径。
+
+- Decision:
+  - 新增 `source_blocks` 表，保存每个文档的结构分块、`source_type`、`include_decision`、文本、hash、offset、section 和输入处理版本
+  - 新增 `chunk_source_blocks` 表，记录每个 chunk 来自哪些 source block，以及在 chunk 内的顺序和片段 offset/hash
+  - source type 收敛为结构事实：`front_matter`、`table_block`、`quote_material`、`structured_dump`、`media_placeholder`、`author_narrative`
+  - 普通正文默认 `author_narrative -> extract`
+  - `front_matter -> context_only`，`table_block -> extract`，`quote_material -> context_only`，`structured_dump/media_placeholder -> exclude`
+  - `extract_document_context()` 只从真正 front matter 提取 title/author/time，不再从正文段落或普通表格推断当前文档 metadata
+- Why:
+  - PBL 和项目材料中经常出现 GPT/Codex 建议、讨论、读书叙述和反思材料，按“你/建议/步骤/配置”等词排除会误删有效正文
+  - 输入层应优先记录 Markdown / 文本结构事实，而不是承担脆弱的语义来源判断
+  - 持久化 source block 和 chunk provenance 后，可以查询 chunk 的来源和被排除块的结构边界，不再只能依赖原始文件复现判断
+- Implemented:
+  - `layers/input_layer.py` 新增带来源映射的 chunk 处理路径，并保持 `chunk_document()` 的旧返回形状兼容
+  - 更新保存流程为 documents -> source_blocks -> chunks -> chunk_source_blocks
+  - `tests/test_input_layer.py` 覆盖 front matter、正文 metadata 词、建议/步骤/配置文本、table、quote、structured dump、media placeholder 和 provenance 映射
+- Alternatives rejected:
+  - 继续保留 `external_material -> exclude` 语义启发式
+  - 根据普通正文中的“作者/标题”或表格列名自动识别 document metadata
+  - 本轮新增 `decision_reason` 字段或完整上下文消费模型
+- Risk / debt accepted:
+  - `table_block` 当前默认进入 extraction，可能增加表格噪音，但优先避免误删项目事实
+  - `quote_material` 当前只作为 context-only 持久化，不进入 extraction；后续若要消费引用上下文，需要单独定义
+  - 长 SourceBlock 拆分时 fragment offset 采用保守字符串长度推进，未做复杂 whitespace/span 重建
+- Follow-up:
+  - 观察真实运行后 table block 对 extraction 质量的影响
+  - 后续如需让 context-only 块参与抽取上下文，应先定义明确消费边界和测试
+
+
 ## 2026-05-06
 
 ### 决策

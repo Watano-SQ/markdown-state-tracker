@@ -8,7 +8,7 @@
 
 1. 扫描 Markdown 文档
 2. 基于带输入处理版本的内容 hash 识别新增或修改
-3. chunk 切分并落库
+3. 结构分块、chunk 切分、来源映射并落库
 4. 按需执行 LLM 抽取
 5. 聚合 `state_candidates -> states/state_evidence`
 6. 从数据库生成输出 Markdown
@@ -36,10 +36,11 @@
   - 扫描
   - 显式样本纳入规则（当前至少排除 `AGENTS.md`、`test_*.md` 与夹具目录）
   - 标题提取
-  - 从 front matter / 元数据表格提炼轻量文档上下文
+  - 只从文档开头 front matter 提炼轻量文档上下文
   - 变更检测
-  - 来源类型感知的 chunk 切分
-  - documents/chunks 落库
+  - 结构优先的 `SourceBlock` 分类：`front_matter`、`table_block`、`quote_material`、`structured_dump`、`media_placeholder`、`author_narrative`
+  - `source_blocks`、`chunks`、`chunk_source_blocks` 落库
+  - 普通正文默认 `author_narrative -> extract`；不再用 `external_material` 语义启发式按“你/建议/步骤/配置”等词排除正文
 - [layers/middle_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/middle_layer.py)
   - `ExtractionResult` 相关 dataclass
   - extractions / states / state_evidence / retrieval_candidates / stats
@@ -129,6 +130,7 @@
 - `db/schema.py` 与分散 SQL
   - schema 改动波及面大
   - `python main.py --init` 有破坏性
+  - `source_blocks` 持久化输入结构分块和 include decision；`chunk_source_blocks` 记录 chunk provenance
 - `main.py` 与 `documents.status`
   - `processed` 只表示该文档当前所有 chunk 都已有 extraction
   - pending 队列以“chunk 是否缺少 extraction”为恢复依据，会重新纳入旧的过早 processed 文档中的未抽取 chunk
@@ -138,9 +140,10 @@
   - 正式扫描链路不会默认纳入控制文档和测试夹具
   - 应按潜在敏感数据处理
 - 文档上下文
-  - front matter 与元数据表格不进入正文 chunk
-  - 当前只提炼标题、作者、文档时间作为抽取上下文
-  - 非正文 context-only 块仍没有独立持久化通道
+  - front matter 不进入正文 chunk，但会作为 `source_blocks.include_decision = context_only` 持久化
+  - 普通正文和普通表格中的“作者/标题”等词不再被当作文档 metadata
+  - 当前只从真正 front matter 提炼标题、作者、文档时间作为抽取上下文
+  - quote block 当前 `context_only`；structured dump 与 media placeholder 当前 `exclude`
 - `config.py`
   - 导入即创建目录，存在副作用
 
@@ -163,7 +166,8 @@
 - `documents.status` 只有最小完成语义：所有 chunk 都有 extraction 后才能变为 `processed`
 - 失败 chunk 可通过 pending 队列重新进入抽取，但完整失败状态机、错误持久化与重试策略仍未设计
 - `retrieval_candidates` 已接入 pending 候选池；`relation_candidates` 仍未接入 pending 持久化链路，也不会直接写入正式 `relations`
-- 非正文 context-only 块目前只支持少量文档元数据提炼，尚未有完整存储和消费模型
+- 非正文 context-only 块已有 `source_blocks` 持久化，但抽取层尚未消费完整 context-only 块内容
+- `table_block` 当前默认进入 extraction，避免误删表格中的项目事实；后续仍需观察是否需要更细的 table 准入策略
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱
 - `ContextBundle` / `CandidateTopicBundle` / `BundleNarrative` 当前都只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式

@@ -20,75 +20,18 @@ from db import get_connection
 
 logger = get_logger("input")
 
-INPUT_PROCESSING_VERSION = "input-v2-source-aware-boundaries"
+INPUT_PROCESSING_VERSION = "input-v3-structural-source-blocks"
 CONTROL_DOCUMENT_FILENAMES = {"agents.md"}
 EXCLUDED_DOCUMENT_PREFIXES = ("test_",)
 EXCLUDED_DIRECTORY_NAMES = {"tests", "fixtures", "validation"}
-METADATA_FIELD_KEYS = {
-    "author",
-    "title",
-    "created_at",
-    "updated_at",
-    "book_name",
-    "description",
-    "slug",
-    "id",
-    "cover",
-    "作者",
-    "标题",
-    "创建时间",
-    "更新时间",
+INCLUDE_DECISIONS = {
+    "author_narrative": "extract",
+    "table_block": "extract",
+    "front_matter": "context_only",
+    "quote_material": "context_only",
+    "structured_dump": "exclude",
+    "media_placeholder": "exclude",
 }
-FIRST_PERSON_MARKERS = (
-    "我",
-    "我们",
-    "自己",
-    "复盘",
-    "尝试",
-    "遇到",
-    "发现",
-    "后来",
-    "没想到",
-    "求助",
-    "学会",
-    "失败",
-    "成功",
-    "改了一下",
-    "打算",
-    "准备",
-    "进展",
-    "效果比较",
-)
-SECOND_PERSON_MARKERS = (
-    "你",
-    "您",
-    "你的",
-    "您的",
-)
-TUTORIAL_MARKERS = (
-    "建议",
-    "推荐",
-    "步骤",
-    "设置",
-    "配置",
-    "操作",
-    "使用",
-    "安装",
-    "优点",
-    "缺点",
-    "可选",
-    "如下",
-    "请先",
-    "请尝试",
-)
-REFERENCE_SECTION_HINTS = (
-    "指令",
-    "教程",
-    "操作步骤",
-    "来源对比",
-    "设置知识",
-    "实践设置知识",
-)
 
 @dataclass
 class DocumentInfo:
@@ -122,18 +65,48 @@ class Chunk:
 
 @dataclass
 class SourceBlock:
-    """带来源类型的文档块。"""
+    """带结构来源类型和准入决策的文档块。"""
     text: str
     source_type: str
+    include_decision: str
     start_offset: int
     end_offset: int
     section_label: Optional[str] = None
+
+
+@dataclass
+class ChunkSourceReference:
+    """chunk 中一个片段对应的 SourceBlock。"""
+    source_block_index: int
+    order_in_chunk: int
+    source_start_offset: Optional[int]
+    source_end_offset: Optional[int]
+    text_fragment_hash: Optional[str]
+
+
+@dataclass
+class ChunkWithSources:
+    """带来源映射的 chunk。"""
+    chunk: Chunk
+    source_references: List[ChunkSourceReference]
+
+
+@dataclass
+class ProcessedDocumentBlocks:
+    """输入层结构分块和可抽取 chunk 的处理结果。"""
+    source_blocks: List[SourceBlock]
+    chunks: List[ChunkWithSources]
 
 
 def compute_hash(content: str) -> str:
     """计算带输入处理版本的内容 hash。"""
     payload = f"{INPUT_PROCESSING_VERSION}\0{content}"
     return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]
+
+
+def compute_text_hash(text: str) -> str:
+    """计算来源块或片段的短 hash。"""
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
 
 
 def estimate_tokens(text: str) -> int:
@@ -164,58 +137,14 @@ def parse_front_matter(content: str) -> Dict[str, str]:
     return {}
 
 
-def _split_table_row(line: str) -> List[str]:
-    """拆分 Markdown 表格行。"""
-    return [cell.strip() for cell in line.strip().strip('|').split('|')]
-
-
-def _is_table_separator_row(cells: List[str]) -> bool:
-    return bool(cells) and all(re.fullmatch(r':?-{3,}:?', cell.strip()) for cell in cells)
-
-
-def parse_metadata_tables(content: str) -> Dict[str, str]:
-    """从文档中的元数据表格提取简单键值。"""
-    lines = content.splitlines()
-    metadata: Dict[str, str] = {}
-    index = 0
-
-    while index < len(lines):
-        stripped = lines[index].strip()
-        if not _is_table_line(stripped):
-            index += 1
-            continue
-
-        table_lines: List[str] = []
-        while index < len(lines) and _is_table_line(lines[index].strip()):
-            table_lines.append(lines[index].strip())
-            index += 1
-
-        table_text = '\n'.join(table_lines)
-        if len(table_lines) < 2 or not _looks_like_metadata_table(table_text):
-            continue
-
-        headers = _split_table_row(table_lines[0])
-        data_start = 1
-        separator_cells = _split_table_row(table_lines[1])
-        if _is_table_separator_row(separator_cells):
-            data_start = 2
-
-        if data_start >= len(table_lines):
-            continue
-
-        values = _split_table_row(table_lines[data_start])
-        for header, value in zip(headers, values):
-            if header and value:
-                metadata[header] = value
-
-    return metadata
-
-
 def extract_document_context(content: str, title: Optional[str] = None) -> Dict[str, Any]:
-    """提炼可传给抽取层的轻量文档上下文。"""
+    """提炼可传给抽取层的轻量文档上下文。
+
+    只有文档开头 front matter 作为文档元信息来源。正文段落和表格
+    即使包含“作者”“标题”等列名或词语，也不再被当作当前文档 metadata。
+    """
     front_matter = parse_front_matter(content)
-    table_metadata = parse_metadata_tables(content)
-    metadata = {**table_metadata, **front_matter}
+    metadata = front_matter
 
     context: Dict[str, Any] = {}
     document_title = title or metadata.get('title') or metadata.get('标题')
@@ -340,33 +269,15 @@ def _make_source_block(
     text = raw_text.strip()
     start_offset = line_offsets[start_index]
     end_offset = line_offsets[end_index - 1] + len(lines[end_index - 1].rstrip('\r\n'))
+    include_decision = INCLUDE_DECISIONS.get(source_type, "extract")
     return SourceBlock(
         text=text,
         source_type=source_type,
+        include_decision=include_decision,
         start_offset=start_offset,
         end_offset=end_offset,
         section_label=section_label,
     )
-
-
-def _looks_like_metadata_table(text: str) -> bool:
-    normalized = text.replace(' ', '')
-    return any(token in normalized for token in ('|作者|', '|创建时间|', '|更新时间|', '|author|', '|created_at|', '|updated_at|'))
-
-
-def _looks_like_document_metadata(text: str, near_document_start: bool) -> bool:
-    if not near_document_start:
-        return False
-
-    matches = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        key = stripped.split(':', 1)[0].split('：', 1)[0].strip()
-        if key in METADATA_FIELD_KEYS:
-            matches += 1
-    return matches >= 2
 
 
 def _looks_like_media_placeholder(text: str) -> bool:
@@ -415,46 +326,23 @@ def _looks_like_structured_dump(text: str) -> bool:
     return False
 
 
-def _has_first_person_markers(text: str) -> bool:
-    return any(marker in text for marker in FIRST_PERSON_MARKERS)
-
-
-def _looks_like_external_material(text: str, section_label: Optional[str]) -> bool:
-    stripped = text.strip()
-    if any(marker in stripped for marker in SECOND_PERSON_MARKERS):
-        return True
-
-    if not _has_first_person_markers(stripped):
-        if section_label and any(hint in section_label for hint in REFERENCE_SECTION_HINTS):
-            return True
-
-        if any(marker in stripped for marker in TUTORIAL_MARKERS):
-            return True
-
-        if re.fullmatch(r'\*\*[^*]{1,40}\*\*', stripped):
-            return True
-
-    return False
-
-
 def classify_text_block(
     text: str,
     *,
     near_document_start: bool,
     section_label: Optional[str],
 ) -> str:
-    """为普通文本块分配最小来源类型。"""
+    """为普通文本块分配结构来源类型。
+
+    near_document_start 和 section_label 保留在签名中以兼容调用点，但当前
+    不再用它们根据“作者/标题/建议/步骤/配置”等词做语义排除。
+    """
+    _ = near_document_start, section_label
     if _looks_like_media_placeholder(text):
         return "media_placeholder"
 
-    if _looks_like_document_metadata(text, near_document_start):
-        return "document_metadata"
-
     if _looks_like_structured_dump(text):
         return "structured_dump"
-
-    if _looks_like_external_material(text, section_label):
-        return "external_material"
 
     return "author_narrative"
 
@@ -485,7 +373,7 @@ def split_document_into_source_blocks(content: str) -> List[SourceBlock]:
                         line_offsets,
                         0,
                         closing_index + 1,
-                        "document_metadata",
+                        "front_matter",
                         None,
                     )
                 )
@@ -494,7 +382,7 @@ def split_document_into_source_blocks(content: str) -> List[SourceBlock]:
 
     while index < len(lines):
         stripped = lines[index].strip()
-        if not stripped or _is_horizontal_rule(stripped):
+        if not stripped:
             index += 1
             continue
 
@@ -554,7 +442,7 @@ def split_document_into_source_blocks(content: str) -> List[SourceBlock]:
                 line_offsets,
                 index,
                 end_index,
-                "metadata_table" if _looks_like_metadata_table(''.join(lines[index:end_index])) else "structured_dump",
+                "table_block",
                 current_section,
             )
             blocks.append(block)
@@ -721,38 +609,52 @@ def get_changed_documents(documents: List[DocumentInfo]) -> Tuple[List[DocumentI
     return new_docs, modified_docs
 
 
-def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
-    """将文档切分为 chunks
-
-    仅保留作者正文叙述块进入抽取链路，并在来源类型边界处停止合并。
-    """
+def chunk_document_with_sources(content: str, max_tokens: int = 500) -> ProcessedDocumentBlocks:
+    """将文档切分为来源块和可抽取 chunks。"""
     source_blocks = split_document_into_source_blocks(content)
-    chunks: List[Chunk] = []
+    chunks: List[ChunkWithSources] = []
     current_blocks: List[SourceBlock] = []
+    current_block_indexes: List[int] = []
     current_tokens = 0
     chunk_index = 0
 
     def flush_current_blocks() -> None:
-        nonlocal current_blocks, current_tokens, chunk_index
+        nonlocal current_blocks, current_block_indexes, current_tokens, chunk_index
         if not current_blocks:
             return
 
         chunk_text = '\n\n'.join(block.text for block in current_blocks)
+        source_references = [
+            ChunkSourceReference(
+                source_block_index=block_index,
+                order_in_chunk=order,
+                source_start_offset=block.start_offset,
+                source_end_offset=block.end_offset,
+                text_fragment_hash=compute_text_hash(block.text),
+            )
+            for order, (block_index, block) in enumerate(
+                zip(current_block_indexes, current_blocks)
+            )
+        ]
         chunks.append(
-            Chunk(
-                text=chunk_text,
-                index=chunk_index,
-                token_estimate=current_tokens,
-                start_offset=current_blocks[0].start_offset,
-                end_offset=current_blocks[-1].end_offset,
-                section_label=current_blocks[-1].section_label,
+            ChunkWithSources(
+                chunk=Chunk(
+                    text=chunk_text,
+                    index=chunk_index,
+                    token_estimate=current_tokens,
+                    start_offset=current_blocks[0].start_offset,
+                    end_offset=current_blocks[-1].end_offset,
+                    section_label=current_blocks[-1].section_label,
+                ),
+                source_references=source_references,
             )
         )
         chunk_index += 1
         current_blocks = []
+        current_block_indexes = []
         current_tokens = 0
 
-    def append_long_block(block: SourceBlock) -> None:
+    def append_long_block(block_index: int, block: SourceBlock) -> None:
         nonlocal chunk_index
         sentences = re.split(r'([。！？.!?])', block.text)
         temp_chunk: List[str] = []
@@ -770,16 +672,29 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
             if temp_tokens + sentence_tokens > max_tokens and temp_chunk:
                 chunk_text = ''.join(temp_chunk)
                 chunks.append(
-                    Chunk(
-                        text=chunk_text,
-                        index=chunk_index,
-                        token_estimate=temp_tokens,
-                        start_offset=temp_start,
-                        end_offset=temp_start + len(chunk_text),
-                        section_label=block.section_label,
+                    ChunkWithSources(
+                        chunk=Chunk(
+                            text=chunk_text,
+                            index=chunk_index,
+                            token_estimate=temp_tokens,
+                            start_offset=temp_start,
+                            end_offset=temp_start + len(chunk_text),
+                            section_label=block.section_label,
+                        ),
+                        source_references=[
+                            ChunkSourceReference(
+                                source_block_index=block_index,
+                                order_in_chunk=0,
+                                source_start_offset=temp_start,
+                                source_end_offset=temp_start + len(chunk_text),
+                                text_fragment_hash=compute_text_hash(chunk_text),
+                            )
+                        ],
                     )
                 )
                 chunk_index += 1
+                # Offset accounting is conservative: SourceBlock text is stripped
+                # from the raw lines, so leading/trailing whitespace is not modeled.
                 temp_start += len(chunk_text)
                 temp_chunk = []
                 temp_tokens = 0
@@ -791,47 +706,67 @@ def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
         if temp_chunk:
             chunk_text = ''.join(temp_chunk)
             chunks.append(
-                Chunk(
-                    text=chunk_text,
-                    index=chunk_index,
-                    token_estimate=temp_tokens,
-                    start_offset=temp_start,
-                    end_offset=temp_start + len(chunk_text),
-                    section_label=block.section_label,
+                ChunkWithSources(
+                    chunk=Chunk(
+                        text=chunk_text,
+                        index=chunk_index,
+                        token_estimate=temp_tokens,
+                        start_offset=temp_start,
+                        end_offset=temp_start + len(chunk_text),
+                        section_label=block.section_label,
+                    ),
+                    source_references=[
+                        ChunkSourceReference(
+                            source_block_index=block_index,
+                            order_in_chunk=0,
+                            source_start_offset=temp_start,
+                            source_end_offset=temp_start + len(chunk_text),
+                            text_fragment_hash=compute_text_hash(chunk_text),
+                        )
+                    ],
                 )
             )
             chunk_index += 1
 
-    for block in source_blocks:
-        if block.source_type != "author_narrative":
+    for block_index, block in enumerate(source_blocks):
+        if block.include_decision != "extract":
             flush_current_blocks()
             continue
 
         block_tokens = estimate_tokens(block.text)
         if block_tokens > max_tokens:
             flush_current_blocks()
-            append_long_block(block)
+            append_long_block(block_index, block)
             continue
 
         if current_blocks and (
             current_tokens + block_tokens > max_tokens
             or current_blocks[-1].section_label != block.section_label
+            or current_blocks[-1].source_type != block.source_type
         ):
             flush_current_blocks()
 
         current_blocks.append(block)
+        current_block_indexes.append(block_index)
         current_tokens += block_tokens
 
     flush_current_blocks()
-    return chunks
+    return ProcessedDocumentBlocks(source_blocks=source_blocks, chunks=chunks)
 
 
-def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
-    """保存文档和 chunks 到数据库，返回 document_id"""
+def chunk_document(content: str, max_tokens: int = 500) -> List[Chunk]:
+    """将文档切分为 chunks，保持旧调用方只拿正文 chunk 的外部行为。"""
+    processed = chunk_document_with_sources(content, max_tokens=max_tokens)
+    return [chunk_with_sources.chunk for chunk_with_sources in processed.chunks]
+
+
+def save_document_and_chunks(doc: DocumentInfo, processed: ProcessedDocumentBlocks) -> int:
+    """保存文档、SourceBlocks、chunks 和来源映射到数据库，返回 document_id。"""
     start_time = perf_counter()
     conn = get_connection()
     cursor = conn.cursor()
     old_chunk_count = 0
+    old_source_block_count = 0
     action = "insert"
     
     # 检查是否已存在
@@ -843,6 +778,8 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
         action = "update"
         cursor.execute("SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc_id,))
         old_chunk_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM source_blocks WHERE document_id = ?", (doc_id,))
+        old_source_block_count = cursor.fetchone()[0]
         # 更新文档
         cursor.execute("""
             UPDATE documents 
@@ -853,6 +790,7 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
         
         # 删除旧 chunks（CASCADE 会删除相关 extractions）
         cursor.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
+        cursor.execute("DELETE FROM source_blocks WHERE document_id = ?", (doc_id,))
     else:
         # 插入新文档
         cursor.execute("""
@@ -860,15 +798,68 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
             VALUES (?, ?, ?, ?, 'pending')
         """, (doc.path, doc.title, doc.modified_time, doc.content_hash))
         doc_id = cursor.lastrowid
-    
-    # 插入 chunks
-    for chunk in chunks:
+
+    source_block_ids: Dict[int, int] = {}
+    for block_index, block in enumerate(processed.source_blocks):
+        cursor.execute("""
+            INSERT INTO source_blocks (
+                document_id,
+                block_index,
+                source_type,
+                include_decision,
+                text,
+                text_hash,
+                start_offset,
+                end_offset,
+                section_label,
+                input_processing_version
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            doc_id,
+            block_index,
+            block.source_type,
+            block.include_decision,
+            block.text,
+            compute_text_hash(block.text),
+            block.start_offset,
+            block.end_offset,
+            block.section_label,
+            INPUT_PROCESSING_VERSION,
+        ))
+        source_block_ids[block_index] = cursor.lastrowid
+
+    # 插入 chunks 和来源映射
+    for chunk_with_sources in processed.chunks:
+        chunk = chunk_with_sources.chunk
         cursor.execute("""
             INSERT INTO chunks (document_id, chunk_index, text, token_estimate, 
                               start_offset, end_offset, section_label)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (doc_id, chunk.index, chunk.text, chunk.token_estimate,
               chunk.start_offset, chunk.end_offset, chunk.section_label))
+        chunk_id = cursor.lastrowid
+
+        for reference in chunk_with_sources.source_references:
+            source_block_id = source_block_ids[reference.source_block_index]
+            cursor.execute("""
+                INSERT INTO chunk_source_blocks (
+                    chunk_id,
+                    source_block_id,
+                    order_in_chunk,
+                    source_start_offset,
+                    source_end_offset,
+                    text_fragment_hash
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                chunk_id,
+                source_block_id,
+                reference.order_in_chunk,
+                reference.source_start_offset,
+                reference.source_end_offset,
+                reference.text_fragment_hash,
+            ))
     
     conn.commit()
     log_event(
@@ -880,7 +871,9 @@ def save_document_and_chunks(doc: DocumentInfo, chunks: List[Chunk]) -> int:
         document_id=doc_id,
         path=doc.path,
         title=doc.title,
-        chunk_count=len(chunks),
+        source_block_count=len(processed.source_blocks),
+        chunk_count=len(processed.chunks),
+        replaced_source_block_count=old_source_block_count,
         replaced_chunk_count=old_chunk_count,
         action=action,
         duration_ms=(perf_counter() - start_time) * 1000,
@@ -928,13 +921,14 @@ def process_input(input_dir: Path = INPUT_DIR) -> Dict[str, Any]:
     processed = []
     for doc in docs_to_process:
         chunk_start = perf_counter()
-        chunks = chunk_document(doc.content)
-        doc_id = save_document_and_chunks(doc, chunks)
+        processed_blocks = chunk_document_with_sources(doc.content)
+        doc_id = save_document_and_chunks(doc, processed_blocks)
         processed.append({
             'path': doc.path,
             'title': doc.title,
             'doc_id': doc_id,
-            'chunk_count': len(chunks),
+            'source_block_count': len(processed_blocks.source_blocks),
+            'chunk_count': len(processed_blocks.chunks),
             'is_new': doc in new_docs
         })
         log_event(
@@ -946,7 +940,8 @@ def process_input(input_dir: Path = INPUT_DIR) -> Dict[str, Any]:
             document_id=doc_id,
             path=doc.path,
             title=doc.title,
-            chunk_count=len(chunks),
+            source_block_count=len(processed_blocks.source_blocks),
+            chunk_count=len(processed_blocks.chunks),
             action="new" if doc in new_docs else "modified",
             duration_ms=(perf_counter() - chunk_start) * 1000,
         )

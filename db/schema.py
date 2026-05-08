@@ -30,7 +30,38 @@ CREATE TABLE IF NOT EXISTS chunks (
     UNIQUE(document_id, chunk_index)
 );
 
--- 3. 每个 chunk 的结构化提炼结果
+-- 3. 文档结构分块，记录输入层的来源类型和准入决策
+CREATE TABLE IF NOT EXISTS source_blocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    block_index INTEGER NOT NULL,
+    source_type TEXT NOT NULL,
+    include_decision TEXT NOT NULL,      -- extract, context_only, exclude
+    text TEXT NOT NULL,
+    text_hash TEXT,
+    start_offset INTEGER,
+    end_offset INTEGER,
+    section_label TEXT,
+    input_processing_version TEXT,
+    created_at REAL DEFAULT (julianday('now')),
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+    UNIQUE(document_id, block_index)
+);
+
+-- 3a. chunk 与来源块的映射；chunk 可由多块合并，长块也可拆成多个 chunk
+CREATE TABLE IF NOT EXISTS chunk_source_blocks (
+    chunk_id INTEGER NOT NULL,
+    source_block_id INTEGER NOT NULL,
+    order_in_chunk INTEGER NOT NULL,
+    source_start_offset INTEGER,
+    source_end_offset INTEGER,
+    text_fragment_hash TEXT,
+    PRIMARY KEY (chunk_id, source_block_id, order_in_chunk),
+    FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_block_id) REFERENCES source_blocks(id) ON DELETE CASCADE
+);
+
+-- 4. 每个 chunk 的结构化提炼结果
 CREATE TABLE IF NOT EXISTS extractions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chunk_id INTEGER NOT NULL,
@@ -42,7 +73,7 @@ CREATE TABLE IF NOT EXISTS extractions (
     FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
 );
 
--- 4. 聚合后的状态项
+-- 5. 聚合后的状态项
 CREATE TABLE IF NOT EXISTS states (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category TEXT NOT NULL,       -- 大类：如 dynamic, static
@@ -59,7 +90,7 @@ CREATE TABLE IF NOT EXISTS states (
     last_updated REAL DEFAULT (julianday('now'))
 );
 
--- 4a. 状态证据关联表（多对多关系）
+-- 5a. 状态证据关联表（多对多关系）
 CREATE TABLE IF NOT EXISTS state_evidence (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     state_id INTEGER NOT NULL,
@@ -75,7 +106,7 @@ CREATE TABLE IF NOT EXISTS state_evidence (
     CHECK (chunk_id IS NOT NULL OR extraction_id IS NOT NULL)  -- 至少有一个关联
 );
 
--- 5. 对象之间的关系
+-- 6. 对象之间的关系
 CREATE TABLE IF NOT EXISTS relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_type TEXT NOT NULL,    -- 如 state, entity
@@ -87,7 +118,7 @@ CREATE TABLE IF NOT EXISTS relations (
     created_at REAL DEFAULT (julianday('now'))
 );
 
--- 6. 待判断是否需要补充检索的候选对象
+-- 7. 待判断是否需要补充检索的候选对象
 CREATE TABLE IF NOT EXISTS retrieval_candidates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     surface_form TEXT NOT NULL,       -- 原始出现形式
@@ -101,7 +132,7 @@ CREATE TABLE IF NOT EXISTS retrieval_candidates (
     created_at REAL DEFAULT (julianday('now'))
 );
 
--- 7. 输出文档的版本快照
+-- 8. 输出文档的版本快照
 CREATE TABLE IF NOT EXISTS output_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     content_md TEXT NOT NULL,
@@ -113,6 +144,9 @@ CREATE TABLE IF NOT EXISTS output_snapshots (
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_path ON documents(path);
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_source_blocks_document_id ON source_blocks(document_id);
+CREATE INDEX IF NOT EXISTS idx_source_blocks_type ON source_blocks(source_type);
+CREATE INDEX IF NOT EXISTS idx_chunk_source_blocks_block_id ON chunk_source_blocks(source_block_id);
 CREATE INDEX IF NOT EXISTS idx_extractions_chunk_id ON extractions(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_states_category ON states(category);
 CREATE INDEX IF NOT EXISTS idx_states_status ON states(status);
