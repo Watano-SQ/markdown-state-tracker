@@ -6,6 +6,35 @@
 
 ### 决策
 
+新增 `state_candidate_supports` 作为 state candidate 晋升前的准入记录层，不替代 `state_evidence`。
+
+- Decision:
+  - 新增 `state_candidate_supports` 表，按 `extraction_id + candidate_index` 幂等记录每个 candidate 的 `accept/reject` 与原因
+  - `accept` 只允许 `reason='accepted'`，并记录非空 `state_id`
+  - `reject` 只允许 `invalid_candidate`、`missing_subject`、`no_text_support`、`context_only_only`，且 `state_id` 保持为空
+  - 新增 `v_state_candidate_support_trace`，从 `extraction_json.state_candidates[candidate_index]` 展示 candidate 摘要、主体、category/subtype 与 chunk 预览
+  - aggregator 在写 `states/state_evidence` 之前先做 candidate 准入判断；rejected candidate 不写入 `states` 或 `state_evidence`
+- Why:
+  - `state_evidence` 只能解释已经进入 canonical state 的正式证据链，无法观察被跳过 candidate 的准入命运
+  - `context_only` 材料已经进入 extraction context，需要防止 LLM 仅根据 context-only 材料生成可晋升 state
+  - candidate 层需要可查询的 accept/reject 记录，但不应保存 matched text、support score 或 evidence excerpt，避免形成第二套 evidence
+- Implemented:
+  - aggregator 拆分 `invalid_candidate` 与 `missing_subject`，继续兼容 legacy no-subject candidate
+  - 正文支撑只来自 `chunks.text`；`extraction_json.context.source_context_blocks` 优先用于识别 `context_only_only`，缺失时保守回查同文档 `source_blocks.include_decision='context_only'`
+  - 基础支撑判断只用短语/关键词重合，不引入 embedding、复杂 NLP、外部检索或 relation persistence
+  - 聚合结果统计新增 accepted/rejected 及各 reject reason 计数
+  - 测试覆盖 accepted、`context_only_only`、`no_text_support`、`missing_subject`、`invalid_candidate`、幂等与 trace view
+- Alternatives rejected:
+  - 把 candidate 准入信息塞进 `state_evidence.note`
+  - 把 context-only block 加入 `state_evidence`
+  - 在本轮实现 relation persistence、retrieval lifecycle 或 output layer / `BundleNarrative` 重写
+- Risk / debt accepted:
+  - 支撑判断是保守的第一版词面规则，不证明 extraction 质量或 state 事实正确性
+  - `v_state_candidate_support_trace` 依赖 SQLite JSON1 的动态 path 拼接
+  - 当前 Markdown 输出仍存在表述过泛、主题标题弱、上下文报告不够像最终文章的问题；该问题已记录为 deferred，留给后续 output layer / `BundleNarrative` 阶段
+
+### 决策
+
 `include_decision=context_only` 正式接入 chunk extraction context，并用查询视图区分正文证据链与上下文链。
 
 - Decision:

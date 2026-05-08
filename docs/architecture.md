@@ -10,7 +10,7 @@
 2. 基于带输入处理版本的内容 hash 识别新增或修改
 3. 结构分块、chunk 切分、来源映射并落库
 4. 按需执行 LLM 抽取
-5. 聚合 `state_candidates -> states/state_evidence`
+5. 记录 `state_candidates -> state_candidate_supports` 准入结果，并将 accepted candidate 聚合进 `states/state_evidence`
 6. 从数据库生成输出 Markdown
 
 注意：基础聚合链路现已接入主流程，失败 chunk 可通过 pending 队列重新纳入，`retrieval_candidates` 也已进入 pending 候选池；但完整失败状态机、关系持久化、retrieval 裁决/完整生命周期仍未完成。
@@ -44,17 +44,19 @@
   - 普通正文默认 `author_narrative -> extract`；不再用 `external_material` 语义启发式按“你/建议/步骤/配置”等词排除正文
 - [layers/middle_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/middle_layer.py)
   - `ExtractionResult` 相关 dataclass
-  - extractions / states / state_evidence / retrieval_candidates / stats
+  - extractions / states / state_evidence / state_candidate_supports / retrieval_candidates / stats
   - chunk 级 pending 查询与文档完成标记
   - extraction JSON 可携带 `document_mode` 与候选级 `subject_type` / `subject_key`
   - `states` 以 additive 字段保存 `subject_type` / `subject_key` / `canonical_summary` / `display_summary`
 - [layers/aggregator.py](/D:/Apps/Python/lab/personal_prompt/layers/aggregator.py)
   - 读取 `extractions`
   - 规范化 `state_candidates`
-  - 对显式 unknown 或缺少 subject_key 的主体候选做最小保守拒绝
+  - 对每个 `state_candidate` 写入 `state_candidate_supports` 准入记录
+  - 对无效 candidate、显式 unknown 主体或缺少 subject_key 的主体候选做最小保守拒绝
+  - 只接受在 `chunks.text` 中有基本正文支撑的候选；只被 `context_only` 材料支撑的候选记录为 `context_only_only` reject
   - 优先按 `subject_type` / `subject_key` / category / subtype / `canonical_summary` 归并 state
   - 将 `retrieval_candidates` 写入 pending 候选池，并按 source chunk 保持重复聚合幂等
-  - 写入 `states` 与 `state_evidence`
+  - accepted candidate 写入 `states` 与 `state_evidence`；rejected candidate 不写 state/evidence
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
   - 选择活跃状态
   - 通过当前唯一的 `default` 输出 profile 包装现有输出配置
@@ -132,6 +134,7 @@
   - schema 改动波及面大
   - `python main.py --init` 有破坏性
   - `source_blocks` 持久化输入结构分块和 include decision；`chunk_source_blocks` 记录 chunk provenance
+  - `state_candidate_supports` 是 candidate 级准入记录，不保存 excerpt、matched text 或 support score，也不替代 `state_evidence`
 - `main.py` 与 `documents.status`
   - `processed` 只表示该文档当前所有 chunk 都已有 extraction
   - pending 队列以“chunk 是否缺少 extraction”为恢复依据，会重新纳入旧的过早 processed 文档中的未抽取 chunk
@@ -172,8 +175,10 @@
 - 非正文 context-only 块已有 `source_blocks` 持久化，并会作为 bounded preview 进入 extraction context；抽取层不得仅根据这些上下文材料生成 observation
 - `table_block` 当前默认不进入 `chunks.text`，只作为 `context_only` 辅助当前 chunk 解释；后续仍需观察是否需要更细的 table 准入策略
 - 查询视图已分开正文证据链和上下文链：`v_chunk_source_trace` / `v_extraction_source_trace` / `v_state_source_trace` 追踪 extract blocks，`v_extraction_context_trace` 追踪 context_only blocks
+- `v_state_candidate_support_trace` 可查询 accepted/rejected candidate 的准入决策；它解释 candidate 是否进入 state，不解释 state 的正式证据链
 - 抽取词表和 subtype 词表的权威来源分散在代码和文档里
 - 主体字段与 canonical/display 摘要已进入 `states` schema；仍没有主体 registry、层级 state 或跨主体关系图谱
+- 当前 Markdown 输出仍存在表述过泛、主题标题弱、上下文报告不够像最终文章等质量问题；这些属于后续 output layer / `BundleNarrative` 阶段，本轮未修改输出层
 - `ContextBundle` / `CandidateTopicBundle` / `BundleNarrative` 当前都只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式
 - LLM narrative 分类只是可选输出整理器，不是新的 extractor 或 aggregator；默认 rule 模式不需要真实 API
 - 未归组 state 当前只进入输出层返回值和日志诊断，不作为 `status.md` 的正式 `待澄清` 章节展示

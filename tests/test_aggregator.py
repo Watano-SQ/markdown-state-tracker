@@ -10,7 +10,13 @@ from pathlib import Path
 import db.connection as db_connection
 from db import close_connection, init_db
 from layers.aggregator import aggregate_extractions
-from layers.middle_layer import ExtractionResult, RetrievalCandidate, StateCandidate
+from layers.middle_layer import (
+    ExtractionContext,
+    ExtractionResult,
+    RetrievalCandidate,
+    SourceContextBlock,
+    StateCandidate,
+)
 
 
 class AggregatorTests(unittest.TestCase):
@@ -45,6 +51,8 @@ class AggregatorTests(unittest.TestCase):
         canonical_summary: str | None = None,
         display_summary: str | None = None,
         retrieval_candidates: list[RetrievalCandidate] | None = None,
+        chunk_text: str | None = None,
+        source_context_texts: list[str] | None = None,
     ) -> tuple[int, int]:
         conn = db_connection.get_connection()
         cursor = conn.cursor()
@@ -70,7 +78,7 @@ class AggregatorTests(unittest.TestCase):
             INSERT INTO chunks (document_id, chunk_index, text, token_estimate)
             VALUES (?, ?, ?, ?)
             """,
-            (document_id, 0, "demo chunk", 10),
+            (document_id, 0, chunk_text or summary or "demo chunk", 10),
         )
         chunk_id = cursor.lastrowid
 
@@ -89,7 +97,18 @@ class AggregatorTests(unittest.TestCase):
                     subject_key=subject_key,
                 )
             ]
+        context = ExtractionContext(
+            source_context_blocks=[
+                SourceContextBlock(
+                    source_block_id=index + 1,
+                    source_type="table_block",
+                    text_preview=text,
+                )
+                for index, text in enumerate(source_context_texts or [])
+            ]
+        )
         extraction = ExtractionResult(
+            context=context,
             state_candidates=state_candidates,
             retrieval_candidates=retrieval_candidates or [],
         )
@@ -127,9 +146,19 @@ class AggregatorTests(unittest.TestCase):
         evidence_row = conn.execute(
             "SELECT chunk_id, extraction_id FROM state_evidence"
         ).fetchone()
+        support_row = conn.execute(
+            """
+            SELECT decision, reason, state_id
+            FROM state_candidate_supports
+            WHERE extraction_id = ? AND candidate_index = 0
+            """,
+            (extraction_id,),
+        ).fetchone()
 
         self.assertEqual(result["source_extractions"], 1)
         self.assertEqual(result["aggregated_candidates"], 1)
+        self.assertEqual(result["accepted_candidates"], 1)
+        self.assertEqual(result["rejected_candidates"], 0)
         self.assertEqual(result["evidence_added"], 1)
         self.assertEqual(state_row["category"], "dynamic")
         self.assertEqual(state_row["subtype"], "ongoing_project")
@@ -138,6 +167,9 @@ class AggregatorTests(unittest.TestCase):
         self.assertAlmostEqual(state_row["confidence"], 0.7)
         self.assertEqual(evidence_row["chunk_id"], chunk_id)
         self.assertEqual(evidence_row["extraction_id"], extraction_id)
+        self.assertEqual(support_row["decision"], "accept")
+        self.assertEqual(support_row["reason"], "accepted")
+        self.assertIsNotNone(support_row["state_id"])
 
     def test_aggregate_extractions_is_idempotent_for_existing_evidence(self) -> None:
         self.seed_extraction(summary="正在维护聚合结果", subtype="pending_task")
@@ -148,11 +180,15 @@ class AggregatorTests(unittest.TestCase):
         conn = db_connection.get_connection()
         state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
         evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+        support_count = conn.execute(
+            "SELECT COUNT(*) FROM state_candidate_supports"
+        ).fetchone()[0]
 
         self.assertEqual(first["evidence_added"], 1)
         self.assertEqual(second["evidence_added"], 0)
         self.assertEqual(state_count, 1)
         self.assertEqual(evidence_count, 1)
+        self.assertEqual(support_count, 1)
 
     def test_aggregate_extractions_persists_retrieval_candidates(self) -> None:
         chunk_id, _ = self.seed_extraction(
@@ -303,7 +339,7 @@ class AggregatorTests(unittest.TestCase):
         self.assertEqual(state_row["subtype"], "active_interest")
 
     def test_aggregate_extractions_rejects_explicit_unknown_subject(self) -> None:
-        self.seed_extraction(
+        _, extraction_id = self.seed_extraction(
             summary="这是一条主体不明的教程建议",
             subject_type="unknown",
         )
@@ -313,15 +349,28 @@ class AggregatorTests(unittest.TestCase):
         conn = db_connection.get_connection()
         state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
         evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+        support_row = conn.execute(
+            """
+            SELECT decision, reason, state_id
+            FROM state_candidate_supports
+            WHERE extraction_id = ?
+            """,
+            (extraction_id,),
+        ).fetchone()
 
         self.assertEqual(result["state_candidates"], 1)
         self.assertEqual(result["aggregated_candidates"], 0)
+        self.assertEqual(result["rejected_candidates"], 1)
+        self.assertEqual(result["support_rejected_missing_subject"], 1)
         self.assertEqual(result["skipped_candidates"], 1)
         self.assertEqual(state_count, 0)
         self.assertEqual(evidence_count, 0)
+        self.assertEqual(support_row["decision"], "reject")
+        self.assertEqual(support_row["reason"], "missing_subject")
+        self.assertIsNone(support_row["state_id"])
 
     def test_aggregate_extractions_requires_subject_key_when_subject_type_present(self) -> None:
-        self.seed_extraction(
+        _, extraction_id = self.seed_extraction(
             summary="团队正在推进上线准备",
             subject_type="team",
         )
@@ -330,10 +379,145 @@ class AggregatorTests(unittest.TestCase):
 
         conn = db_connection.get_connection()
         state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+        support_row = conn.execute(
+            "SELECT decision, reason FROM state_candidate_supports WHERE extraction_id = ?",
+            (extraction_id,),
+        ).fetchone()
 
         self.assertEqual(result["aggregated_candidates"], 0)
         self.assertEqual(result["skipped_candidates"], 1)
+        self.assertEqual(result["support_rejected_missing_subject"], 1)
         self.assertEqual(state_count, 0)
+        self.assertEqual(support_row["decision"], "reject")
+        self.assertEqual(support_row["reason"], "missing_subject")
+
+    def test_aggregate_extractions_rejects_context_only_only_candidate(self) -> None:
+        _, extraction_id = self.seed_extraction(
+            summary="Alice documented support trace rollout",
+            subject_type="person",
+            subject_key="Alice",
+            chunk_text="Alice reviewed parser cleanup notes.",
+            source_context_texts=["Alice documented support trace rollout in the release table."],
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+        evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+        support_row = conn.execute(
+            """
+            SELECT decision, reason, state_id
+            FROM state_candidate_supports
+            WHERE extraction_id = ?
+            """,
+            (extraction_id,),
+        ).fetchone()
+
+        self.assertEqual(result["aggregated_candidates"], 0)
+        self.assertEqual(result["rejected_candidates"], 1)
+        self.assertEqual(result["support_rejected_context_only_only"], 1)
+        self.assertEqual(state_count, 0)
+        self.assertEqual(evidence_count, 0)
+        self.assertEqual(support_row["decision"], "reject")
+        self.assertEqual(support_row["reason"], "context_only_only")
+        self.assertIsNone(support_row["state_id"])
+
+    def test_aggregate_extractions_rejects_no_text_support_candidate(self) -> None:
+        _, extraction_id = self.seed_extraction(
+            summary="Alice finished deployment rehearsal",
+            subject_type="person",
+            subject_key="Alice",
+            chunk_text="Alice reviewed parser cleanup notes.",
+            source_context_texts=["The table only lists budget owners."],
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        support_row = conn.execute(
+            """
+            SELECT decision, reason, state_id
+            FROM state_candidate_supports
+            WHERE extraction_id = ?
+            """,
+            (extraction_id,),
+        ).fetchone()
+        state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+        evidence_count = conn.execute("SELECT COUNT(*) FROM state_evidence").fetchone()[0]
+
+        self.assertEqual(result["aggregated_candidates"], 0)
+        self.assertEqual(result["support_rejected_no_text_support"], 1)
+        self.assertEqual(state_count, 0)
+        self.assertEqual(evidence_count, 0)
+        self.assertEqual(support_row["decision"], "reject")
+        self.assertEqual(support_row["reason"], "no_text_support")
+        self.assertIsNone(support_row["state_id"])
+
+    def test_aggregate_extractions_rejects_invalid_candidate(self) -> None:
+        _, extraction_id = self.seed_extraction(
+            summary=" ",
+            chunk_text="The chunk has useful prose, but this candidate is empty.",
+        )
+
+        result = aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        support_row = conn.execute(
+            """
+            SELECT decision, reason, state_id
+            FROM state_candidate_supports
+            WHERE extraction_id = ?
+            """,
+            (extraction_id,),
+        ).fetchone()
+        state_count = conn.execute("SELECT COUNT(*) FROM states").fetchone()[0]
+
+        self.assertEqual(result["aggregated_candidates"], 0)
+        self.assertEqual(result["support_rejected_invalid"], 1)
+        self.assertEqual(state_count, 0)
+        self.assertEqual(support_row["decision"], "reject")
+        self.assertEqual(support_row["reason"], "invalid_candidate")
+        self.assertIsNone(support_row["state_id"])
+
+    def test_state_candidate_support_trace_view_lists_accepts_and_rejects(self) -> None:
+        self.seed_extraction(
+            summary="Alice finished support trace implementation",
+            subject_type="person",
+            subject_key="Alice",
+            category="dynamic",
+            subtype="ongoing_project",
+        )
+        self.seed_extraction(
+            summary="Alice finished unsupported migration",
+            subject_type="person",
+            subject_key="Alice",
+            chunk_text="Alice reviewed parser cleanup notes.",
+        )
+
+        aggregate_extractions()
+
+        conn = db_connection.get_connection()
+        all_rows = conn.execute(
+            """
+            SELECT decision, reason, candidate_summary, subject_type, subject_key
+            FROM v_state_candidate_support_trace
+            ORDER BY support_id
+            """
+        ).fetchall()
+        rejected_rows = conn.execute(
+            """
+            SELECT *
+            FROM v_state_candidate_support_trace
+            WHERE decision = 'reject'
+            """
+        ).fetchall()
+
+        self.assertEqual([row["decision"] for row in all_rows], ["accept", "reject"])
+        self.assertEqual(all_rows[0]["candidate_summary"], "Alice finished support trace implementation")
+        self.assertEqual(all_rows[0]["subject_type"], "person")
+        self.assertEqual(all_rows[0]["subject_key"], "Alice")
+        self.assertEqual(rejected_rows[0]["reason"], "no_text_support")
 
 
 if __name__ == "__main__":

@@ -233,10 +233,21 @@ class ExtractionResult:
         
         state_candidates = []
         for s in data.get('state_candidates', []):
-            time_data = s.get('time')
+            if not isinstance(s, dict):
+                state_candidates.append(StateCandidate(summary=None))
+                continue
+
+            allowed_state_keys = StateCandidate.__dataclass_fields__.keys()
+            state_data = {
+                key: value
+                for key, value in s.items()
+                if key in allowed_state_keys
+            }
+            state_data.setdefault('summary', None)
+            time_data = state_data.get('time')
             if time_data and isinstance(time_data, dict):
-                s['time'] = TimeInfo(**time_data)
-            state_candidates.append(StateCandidate(**s))
+                state_data['time'] = TimeInfo(**time_data)
+            state_candidates.append(StateCandidate(**state_data))
         
         relation_candidates = [RelationCandidate(**r) for r in data.get('relation_candidates', [])]
         retrieval_candidates = [RetrievalCandidate(**r) for r in data.get('retrieval_candidates', [])]
@@ -323,6 +334,8 @@ def get_extractions_for_aggregation() -> List[Dict[str, Any]]:
                e.prompt_version,
                c.document_id,
                c.chunk_index,
+               c.section_label,
+               c.text AS chunk_text,
                d.path,
                d.title
         FROM extractions e
@@ -527,6 +540,213 @@ def get_state_evidence(state_id: int) -> List[Dict[str, Any]]:
     """, (state_id,))
     
     return [dict(row) for row in cursor.fetchall()]
+
+
+STATE_CANDIDATE_SUPPORT_DECISIONS = {"accept", "reject"}
+STATE_CANDIDATE_SUPPORT_REASONS = {
+    "accepted",
+    "invalid_candidate",
+    "missing_subject",
+    "no_text_support",
+    "context_only_only",
+}
+
+
+def _validate_state_candidate_support(
+    *,
+    decision: str,
+    reason: str,
+    state_id: Optional[int],
+) -> None:
+    if decision not in STATE_CANDIDATE_SUPPORT_DECISIONS:
+        raise ValueError(f"Unsupported state candidate support decision: {decision}")
+    if reason not in STATE_CANDIDATE_SUPPORT_REASONS:
+        raise ValueError(f"Unsupported state candidate support reason: {reason}")
+
+    if decision == "accept":
+        if reason != "accepted":
+            raise ValueError("Accepted state candidates must use reason='accepted'")
+        if state_id is None:
+            raise ValueError("Accepted state candidates must include state_id")
+        return
+
+    if reason == "accepted":
+        raise ValueError("Rejected state candidates cannot use reason='accepted'")
+    if state_id is not None:
+        raise ValueError("Rejected state candidates must not include state_id")
+
+
+def record_state_candidate_support(
+    *,
+    extraction_id: int,
+    candidate_index: int,
+    decision: str,
+    reason: str,
+    state_id: Optional[int] = None,
+) -> int:
+    """Upsert a candidate-level admission decision."""
+    _validate_state_candidate_support(
+        decision=decision,
+        reason=reason,
+        state_id=state_id,
+    )
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO state_candidate_supports (
+            extraction_id,
+            candidate_index,
+            decision,
+            reason,
+            state_id
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(extraction_id, candidate_index) DO UPDATE SET
+            decision = excluded.decision,
+            reason = excluded.reason,
+            state_id = excluded.state_id
+        """,
+        (extraction_id, candidate_index, decision, reason, state_id),
+    )
+    row = cursor.execute(
+        """
+        SELECT id
+        FROM state_candidate_supports
+        WHERE extraction_id = ? AND candidate_index = ?
+        """,
+        (extraction_id, candidate_index),
+    ).fetchone()
+    conn.commit()
+    return int(row["id"])
+
+
+def ensure_state_candidate_support(
+    *,
+    extraction_id: int,
+    candidate_index: int,
+    decision: str,
+    reason: str,
+    state_id: Optional[int] = None,
+) -> Tuple[int, bool]:
+    """Ensure a support decision exists; update changed decisions idempotently."""
+    _validate_state_candidate_support(
+        decision=decision,
+        reason=reason,
+        state_id=state_id,
+    )
+
+    conn = get_connection()
+    existing = conn.execute(
+        """
+        SELECT id, decision, reason, state_id
+        FROM state_candidate_supports
+        WHERE extraction_id = ? AND candidate_index = ?
+        """,
+        (extraction_id, candidate_index),
+    ).fetchone()
+    if existing and (
+        existing["decision"] == decision
+        and existing["reason"] == reason
+        and existing["state_id"] == state_id
+    ):
+        return int(existing["id"]), False
+
+    support_id = record_state_candidate_support(
+        extraction_id=extraction_id,
+        candidate_index=candidate_index,
+        decision=decision,
+        reason=reason,
+        state_id=state_id,
+    )
+    return support_id, existing is None
+
+
+def update_state_candidate_support_state_id(
+    *,
+    extraction_id: int,
+    candidate_index: int,
+    state_id: int,
+) -> bool:
+    """Attach an accepted support row to its canonical state."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE state_candidate_supports
+        SET state_id = ?
+        WHERE extraction_id = ?
+          AND candidate_index = ?
+          AND decision = 'accept'
+          AND reason = 'accepted'
+        """,
+        (state_id, extraction_id, candidate_index),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_state_candidate_supports(
+    extraction_id: Optional[int] = None,
+    decision: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch candidate admission records, optionally filtered."""
+    if decision is not None and decision not in STATE_CANDIDATE_SUPPORT_DECISIONS:
+        raise ValueError(f"Unsupported state candidate support decision: {decision}")
+
+    clauses = []
+    params: List[Any] = []
+    if extraction_id is not None:
+        clauses.append("extraction_id = ?")
+        params.append(extraction_id)
+    if decision is not None:
+        clauses.append("decision = ?")
+        params.append(decision)
+
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    cursor = get_connection().execute(
+        f"""
+        SELECT id, extraction_id, candidate_index, decision, reason, state_id, created_at
+        FROM state_candidate_supports
+        {where_sql}
+        ORDER BY extraction_id, candidate_index
+        """,
+        tuple(params),
+    )
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_context_only_source_block_texts(
+    *,
+    document_id: int,
+    section_label: Optional[str] = None,
+) -> List[str]:
+    """Load context_only source block text for conservative support fallback."""
+    if section_label is None:
+        rows = get_connection().execute(
+            """
+            SELECT text
+            FROM source_blocks
+            WHERE document_id = ?
+              AND include_decision = 'context_only'
+            ORDER BY block_index
+            """,
+            (document_id,),
+        ).fetchall()
+    else:
+        rows = get_connection().execute(
+            """
+            SELECT text
+            FROM source_blocks
+            WHERE document_id = ?
+              AND include_decision = 'context_only'
+              AND (section_label = ? OR source_type = 'front_matter')
+            ORDER BY block_index
+            """,
+            (document_id, section_label),
+        ).fetchall()
+    return [str(row["text"]) for row in rows]
 
 
 def archive_orphan_states() -> int:

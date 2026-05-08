@@ -11,8 +11,10 @@ import db.connection as db_connection
 from db import close_connection, init_db
 from layers.middle_layer import (
     ExtractionResult,
+    get_state_candidate_supports,
     get_pending_chunks,
     mark_document_processed,
+    record_state_candidate_support,
     save_extraction,
 )
 
@@ -147,12 +149,100 @@ class MiddleLayerSchemaMigrationTests(unittest.TestCase):
             row["name"]
             for row in conn.execute("PRAGMA index_list(states)").fetchall()
         }
+        support_columns = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA table_info(state_candidate_supports)"
+            ).fetchall()
+        }
+        support_indexes = {
+            row["name"]
+            for row in conn.execute(
+                "PRAGMA index_list(state_candidate_supports)"
+            ).fetchall()
+        }
+        view_row = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'view' AND name = 'v_state_candidate_support_trace'
+            """
+        ).fetchone()
 
         self.assertIn("subject_type", columns)
         self.assertIn("subject_key", columns)
         self.assertIn("canonical_summary", columns)
         self.assertIn("display_summary", columns)
         self.assertIn("idx_states_identity", indexes)
+        self.assertIn("extraction_id", support_columns)
+        self.assertIn("candidate_index", support_columns)
+        self.assertIn("decision", support_columns)
+        self.assertIn("reason", support_columns)
+        self.assertIn("state_id", support_columns)
+        self.assertIn("idx_state_candidate_supports_extraction", support_indexes)
+        self.assertIn("idx_state_candidate_supports_state", support_indexes)
+        self.assertIn("idx_state_candidate_supports_decision", support_indexes)
+        self.assertIsNotNone(view_row)
+
+    def test_state_candidate_support_recording_is_idempotent(self) -> None:
+        init_db()
+        conn = db_connection.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO documents (path, title, modified_time, content_hash, status)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("support-api.md", "Support API", 1.0, "hash-support-api", "processed"),
+        )
+        document_id = cursor.lastrowid
+        cursor.execute(
+            """
+            INSERT INTO chunks (document_id, chunk_index, text, token_estimate)
+            VALUES (?, ?, ?, ?)
+            """,
+            (document_id, 0, "Alice finished support trace implementation.", 10),
+        )
+        chunk_id = cursor.lastrowid
+        cursor.execute(
+            """
+            INSERT INTO extractions (chunk_id, extraction_json, extractor_type)
+            VALUES (?, ?, ?)
+            """,
+            (chunk_id, "{}", "llm"),
+        )
+        extraction_id = cursor.lastrowid
+        cursor.execute(
+            """
+            INSERT INTO states (category, subtype, summary)
+            VALUES (?, ?, ?)
+            """,
+            ("dynamic", "ongoing_project", "Alice finished support trace implementation"),
+        )
+        state_id = cursor.lastrowid
+        conn.commit()
+
+        first_id = record_state_candidate_support(
+            extraction_id=extraction_id,
+            candidate_index=0,
+            decision="accept",
+            reason="accepted",
+            state_id=state_id,
+        )
+        second_id = record_state_candidate_support(
+            extraction_id=extraction_id,
+            candidate_index=0,
+            decision="accept",
+            reason="accepted",
+            state_id=state_id,
+        )
+        supports = get_state_candidate_supports(extraction_id=extraction_id)
+
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(len(supports), 1)
+        self.assertEqual(supports[0]["decision"], "accept")
+        self.assertEqual(supports[0]["reason"], "accepted")
+        self.assertEqual(supports[0]["state_id"], state_id)
 
 
 if __name__ == "__main__":

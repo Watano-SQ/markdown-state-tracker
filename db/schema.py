@@ -106,6 +106,27 @@ CREATE TABLE IF NOT EXISTS state_evidence (
     CHECK (chunk_id IS NOT NULL OR extraction_id IS NOT NULL)  -- 至少有一个关联
 );
 
+-- 5b. state_candidate 准入记录；记录候选是否允许晋升为 state，不替代 state_evidence
+CREATE TABLE IF NOT EXISTS state_candidate_supports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    extraction_id INTEGER NOT NULL,
+    candidate_index INTEGER NOT NULL,
+    decision TEXT NOT NULL CHECK(decision IN ('accept', 'reject')),
+    reason TEXT NOT NULL CHECK(reason IN (
+        'accepted',
+        'invalid_candidate',
+        'missing_subject',
+        'no_text_support',
+        'context_only_only'
+    )),
+    state_id INTEGER,
+    created_at REAL DEFAULT (julianday('now')),
+
+    FOREIGN KEY(extraction_id) REFERENCES extractions(id) ON DELETE CASCADE,
+    FOREIGN KEY(state_id) REFERENCES states(id) ON DELETE SET NULL,
+    UNIQUE(extraction_id, candidate_index)
+);
+
 -- 6. 对象之间的关系
 CREATE TABLE IF NOT EXISTS relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,6 +174,9 @@ CREATE INDEX IF NOT EXISTS idx_states_status ON states(status);
 CREATE INDEX IF NOT EXISTS idx_state_evidence_state_id ON state_evidence(state_id);
 CREATE INDEX IF NOT EXISTS idx_state_evidence_chunk_id ON state_evidence(chunk_id);
 CREATE INDEX IF NOT EXISTS idx_state_evidence_extraction_id ON state_evidence(extraction_id);
+CREATE INDEX IF NOT EXISTS idx_state_candidate_supports_extraction ON state_candidate_supports(extraction_id);
+CREATE INDEX IF NOT EXISTS idx_state_candidate_supports_state ON state_candidate_supports(state_id);
+CREATE INDEX IF NOT EXISTS idx_state_candidate_supports_decision ON state_candidate_supports(decision);
 CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_type, source_id);
 CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_type, target_id);
 
@@ -241,6 +265,53 @@ JOIN documents d ON d.id = c.document_id
 JOIN chunk_source_blocks csb ON csb.chunk_id = c.id
 JOIN source_blocks sb ON sb.id = csb.source_block_id
 WHERE sb.include_decision = 'extract';
+
+-- 查询视图：state_candidate 准入 trace；candidate 字段来自 extraction_json 原文
+CREATE VIEW IF NOT EXISTS v_state_candidate_support_trace AS
+SELECT
+    scs.id AS support_id,
+    scs.extraction_id,
+    scs.candidate_index,
+    scs.decision,
+    scs.reason,
+    scs.state_id,
+    d.path,
+    d.id AS document_id,
+    c.id AS chunk_id,
+    c.chunk_index,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].summary'
+    ) AS candidate_summary,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].canonical_summary'
+    ) AS candidate_canonical_summary,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].display_summary'
+    ) AS candidate_display_summary,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].subject_type'
+    ) AS subject_type,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].subject_key'
+    ) AS subject_key,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].category'
+    ) AS category,
+    json_extract(
+        e.extraction_json,
+        '$.state_candidates[' || scs.candidate_index || '].subtype'
+    ) AS subtype,
+    substr(c.text, 1, 160) AS chunk_text_preview
+FROM state_candidate_supports scs
+JOIN extractions e ON e.id = scs.extraction_id
+JOIN chunks c ON c.id = e.chunk_id
+JOIN documents d ON d.id = c.document_id;
 
 -- 查询视图：extraction 使用的 context_only source blocks（依赖 SQLite JSON1）
 CREATE VIEW IF NOT EXISTS v_extraction_context_trace AS
