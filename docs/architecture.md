@@ -60,6 +60,9 @@
 - [layers/output_layer.py](/D:/Apps/Python/lab/personal_prompt/layers/output_layer.py)
   - 选择活跃状态
   - 通过当前唯一的 `default` 输出 profile 包装现有输出配置
+  - 对每条 state 做 output-only `ReadingDecision` 审查，决定其在阅读视图中是 `standalone`、`supporting` 还是 `defer`
+  - 在同文档内形成 output-only `ReadingCluster`，用相邻 chunk、共享章节、共享对象/事件线索、强锚点和主体—对象连接组织读者上下文
+  - 多主体阅读簇保留全部 subject identities，但不改变任何 state 的 `subject_type` / `subject_key`
   - 通过 `state_evidence -> chunks -> documents` 构造只读 `ContextBundle` 输出投影
   - 使用局部相邻证据和同文档远距离强锚点回收发现上下文 bundle
   - 在 `ContextBundle` 之上构造只读 `CandidateTopicBundle` 与 `BundleNarrative` narrative 投影
@@ -182,7 +185,7 @@
 - `ContextBundle` / `CandidateTopicBundle` / `BundleNarrative` 当前都只是输出层只读投影，不是持久化状态；归组依赖同文档、相邻 chunk、section、主体线索、强锚点和邻近 chunk 补全等保守启发式
 - LLM narrative 分类只是可选输出整理器，不是新的 extractor 或 aggregator；默认 rule 模式不需要真实 API
 - 未归组 state 当前只进入输出层返回值和日志诊断，不作为 `status.md` 的正式 `待澄清` 章节展示
-- 低信息评价类 state 不会独立构成正式 bundle；只有能支撑工具选择、偏好或决策上下文时才会被吸收到阅读视图
+- active reading-view 实现已将短句/评价句修订为“短语用状态 + 输出角色审查”；短句不会仅因短小或评价语气被降级，是否输出取决于主体、对象、关系、证据链和上下文
 - 仓库只有最低可用 Ruff lint 与 GitHub Actions CI；当前没有完整 typecheck 事实源
 - `input_docs/` 的隐私和提交策略需要人类确认
 - 保留文档之间若出现冲突，当前默认以代码和本文件为准；更正式的权威顺序仍需要人类确认

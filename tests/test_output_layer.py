@@ -535,8 +535,11 @@ class OutputLayerProfileTests(unittest.TestCase):
         self.assertNotIn("#### 工具：", content)
         self.assertIn("WhisperDesktop 正在和其他本地转写工具比较。", content)
 
-    def test_low_information_evaluation_is_omitted_when_isolated(self) -> None:
-        document_id = self.insert_document("input_docs/low-info.md", "Low Info")
+    def test_short_pragmatic_evaluation_is_not_low_information(self) -> None:
+        document_id = self.insert_document(
+            "input_docs/short-evaluation.md",
+            "Short Evaluation",
+        )
         chunk_id = self.insert_chunk(
             document_id,
             0,
@@ -553,16 +556,247 @@ class OutputLayerProfileTests(unittest.TestCase):
             "高度认可WhisperDesktop",
             detail="WhisperDesktop，伟大。",
             subject_type="project",
-            subject_key="low-info",
+            subject_key="whisperdesktop-evaluation",
         )
         self.insert_evidence(state_id, chunk_id)
-        output_path = self.make_output_path("-low-info.md")
+        output_path = self.make_output_path("-short-evaluation.md")
 
         result = generate_output(output_path=output_path)
         content = output_path.read_text(encoding="utf-8")
 
-        self.assertNotIn("WhisperDesktop，伟大。", content)
-        self.assertEqual(result["diagnostics"]["narrative"]["low_information_omitted_count"], 1)
+        self.assertIn("WhisperDesktop，伟大。", content)
+        self.assertNotIn("高度认可WhisperDesktop：", content)
+        self.assertNotIn("low_information", str(result["diagnostics"]))
+        reading_roles = result["diagnostics"]["reading_roles"]
+        self.assertEqual(reading_roles[state_id]["role"], "standalone")
+
+    def test_short_sentence_without_subject_or_object_is_deferred(self) -> None:
+        document_id = self.insert_document(
+            "input_docs/short-vague.md",
+            "Short Vague",
+        )
+        chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "伟大。",
+            section_label="杂记",
+        )
+        state_id = self.insert_state(
+            "伟大",
+            detail="伟大。",
+            subject_type=None,
+            subject_key=None,
+        )
+        self.insert_evidence(state_id, chunk_id)
+        output_path = self.make_output_path("-short-vague.md")
+
+        result = generate_output(output_path=output_path)
+        content = output_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("伟大。", content)
+        self.assertIn(state_id, {item.state_id for item in select_context_bundles_for_output().needs_context_items})
+        reading_roles = result["diagnostics"]["reading_roles"]
+        self.assertEqual(reading_roles[state_id]["role"], "defer")
+        self.assertIn("缺少明确对象", reading_roles[state_id]["missing_signals"])
+
+    def test_short_blocker_can_support_project_context(self) -> None:
+        document_id = self.insert_document(
+            "input_docs/aurora-board-blocker.md",
+            "Aurora Board",
+        )
+        project_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "Aurora Board export debugging is the active project context.",
+            section_label="Aurora Board",
+        )
+        blocker_chunk_id = self.insert_chunk(
+            document_id,
+            1,
+            "导出又卡死。",
+            section_label="Aurora Board",
+        )
+        project_state_id = self.insert_state(
+            "Aurora Board export debugging",
+            detail="Aurora Board 的导出调试正在推进。",
+            subject_type="project",
+            subject_key="aurora-board",
+            subtype="ongoing_project",
+        )
+        blocker_state_id = self.insert_state(
+            "导出又卡死",
+            detail="导出又卡死。",
+            subject_type=None,
+            subject_key=None,
+            subtype="recent_event",
+        )
+        self.insert_evidence(project_state_id, project_chunk_id)
+        self.insert_evidence(blocker_state_id, blocker_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        matching_bundles = [
+            bundle
+            for bundle in selection.bundles
+            if set(bundle.state_ids) == {project_state_id, blocker_state_id}
+        ]
+        self.assertEqual(len(matching_bundles), 1)
+        bundle = matching_bundles[0]
+        self.assertIn(blocker_state_id, bundle.supporting_state_ids)
+        self.assertIn("reading_cluster", bundle.merge_basis)
+        self.assertEqual(
+            selection.diagnostics["reading_roles"][blocker_state_id]["role"],
+            "supporting",
+        )
+
+    def test_aurora_board_groups_primary_and_supporting_states(self) -> None:
+        document_id = self.insert_document(
+            "input_docs/aurora-board.md",
+            "Aurora Board",
+        )
+        debug_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "Lin Qiao is debugging Aurora Board export failures.",
+            section_label="Aurora Board",
+        )
+        rule_chunk_id = self.insert_chunk(
+            document_id,
+            1,
+            "Nadia provided a renderer grouping rule for Aurora Board.",
+            section_label="Aurora Board",
+        )
+        debug_state_id = self.insert_state(
+            "Lin Qiao debugs Aurora Board export",
+            detail="Lin Qiao 正在调试 Aurora Board 的导出问题。",
+            subject_type="person",
+            subject_key="lin-qiao",
+            subtype="recent_event",
+        )
+        rule_state_id = self.insert_state(
+            "Nadia renderer grouping rule",
+            detail="Nadia 提供的 renderer grouping rule 支撑 Aurora Board 的排查上下文。",
+            subject_type="person",
+            subject_key="nadia",
+            subtype="active_interest",
+        )
+        self.insert_evidence(debug_state_id, debug_chunk_id)
+        self.insert_evidence(rule_state_id, rule_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        matching_bundles = [
+            bundle
+            for bundle in selection.bundles
+            if set(bundle.state_ids) == {debug_state_id, rule_state_id}
+        ]
+        self.assertEqual(len(matching_bundles), 1)
+        bundle = matching_bundles[0]
+        self.assertEqual(bundle.title, "Aurora Board")
+        self.assertIn(debug_state_id, bundle.primary_state_ids)
+        self.assertIn(rule_state_id, bundle.supporting_state_ids)
+        self.assertIn(("person", "lin-qiao"), bundle.subject_identities)
+        self.assertIn(("person", "nadia"), bundle.subject_identities)
+
+    def test_river_incident_keeps_multiple_subjects_in_one_reading_cluster(self) -> None:
+        document_id = self.insert_document(
+            "input_docs/river-incident.md",
+            "River import incident",
+        )
+        operations_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "The operations team triaged the River import incident.",
+            section_label="River import incident",
+        )
+        incident_chunk_id = self.insert_chunk(
+            document_id,
+            1,
+            "The River import incident remained active during the handoff.",
+            section_label="River import incident",
+        )
+        import_team_chunk_id = self.insert_chunk(
+            document_id,
+            2,
+            "The River import team prepared the recovery checklist.",
+            section_label="River import incident",
+        )
+        operations_state_id = self.insert_state(
+            "Operations team triaged River import incident",
+            detail="operations team 正在分诊 River import incident。",
+            subject_type="team",
+            subject_key="operations-team",
+            subtype="recent_event",
+        )
+        incident_state_id = self.insert_state(
+            "River import incident remains active",
+            detail="River import incident 在交接期间仍然活跃。",
+            subject_type="event",
+            subject_key="river-import-incident",
+            subtype="ongoing_project",
+        )
+        import_team_state_id = self.insert_state(
+            "River import team prepares recovery checklist",
+            detail="River import team 准备恢复检查清单。",
+            subject_type="team",
+            subject_key="river-import-team",
+            subtype="pending_task",
+        )
+        self.insert_evidence(operations_state_id, operations_chunk_id)
+        self.insert_evidence(incident_state_id, incident_chunk_id)
+        self.insert_evidence(import_team_state_id, import_team_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        matching_bundles = [
+            bundle
+            for bundle in selection.bundles
+            if set(bundle.state_ids)
+            == {operations_state_id, incident_state_id, import_team_state_id}
+        ]
+        self.assertEqual(len(matching_bundles), 1)
+        bundle = matching_bundles[0]
+        self.assertEqual(bundle.title, "River import incident")
+        self.assertIn(("team", "operations-team"), bundle.subject_identities)
+        self.assertIn(("event", "river-import-incident"), bundle.subject_identities)
+        self.assertIn(("team", "river-import-team"), bundle.subject_identities)
+
+    def test_unrelated_sections_do_not_merge_across_subjects(self) -> None:
+        document_id = self.insert_document(
+            "input_docs/unrelated-sections.md",
+            "Unrelated Sections",
+        )
+        docker_chunk_id = self.insert_chunk(
+            document_id,
+            0,
+            "Docker mirror setup is being checked.",
+            section_label="Docker",
+        )
+        mcp_chunk_id = self.insert_chunk(
+            document_id,
+            6,
+            "MCP client setup is being checked separately.",
+            section_label="MCP",
+        )
+        docker_state_id = self.insert_state(
+            "Docker mirror setup",
+            detail="Docker mirror setup is being checked.",
+            subject_type="project",
+            subject_key="docker",
+        )
+        mcp_state_id = self.insert_state(
+            "MCP client setup",
+            detail="MCP client setup is being checked separately.",
+            subject_type="project",
+            subject_key="mcp",
+        )
+        self.insert_evidence(docker_state_id, docker_chunk_id)
+        self.insert_evidence(mcp_state_id, mcp_chunk_id)
+
+        selection = select_context_bundles_for_output()
+
+        merged_state_sets = [set(bundle.state_ids) for bundle in selection.bundles]
+        self.assertNotIn({docker_state_id, mcp_state_id}, merged_state_sets)
 
     def test_evaluation_state_can_be_absorbed_with_tool_context(self) -> None:
         document_id = self.insert_document("input_docs/tool-context.md", "Tool Context")

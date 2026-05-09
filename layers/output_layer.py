@@ -100,6 +100,9 @@ DEFAULT_PROFILE_NAME = "default"
 DEFAULT_NARRATIVE_MODE = "rule"
 NARRATIVE_MODE_ENV = "OUTPUT_NARRATIVE_MODE"
 VALID_NARRATIVE_MODES = {"rule", "llm", "auto"}
+READING_ROLE_STANDALONE = "standalone"
+READING_ROLE_SUPPORTING = "supporting"
+READING_ROLE_DEFER = "defer"
 NARRATIVE_SECTION_ORDER = [
     "current_goal",
     "progress",
@@ -127,14 +130,52 @@ WEAK_TOPIC_TITLES = {
     "背景:",
     "背景：",
 }
-LOW_INFORMATION_EVALUATION_HINTS = (
-    "伟大",
-    "好用",
-    "高度认可",
-    "认可",
-    "喜欢",
-    "不错",
-    "很棒",
+GENERIC_CONTEXT_LABELS = {
+    "杂记",
+    "general",
+    "notes",
+    "note",
+    "misc",
+    "未命名主题",
+}
+SUPPORTING_CONTEXT_SUBTYPES = {
+    "background",
+    "active_interest",
+    "relationship",
+    "skill",
+}
+READABLE_RELATION_SUBTYPES = {
+    "ongoing_project",
+    "recent_event",
+    "pending_task",
+    "active_interest",
+    "preference",
+    "background",
+    "skill",
+    "relationship",
+}
+CONNECTION_STOP_WORDS = {
+    "the",
+    "this",
+    "that",
+    "only",
+    "later",
+    "next",
+    "current",
+    "adjacent",
+    "fallback",
+    "empty",
+    "short",
+    "generic",
+    "first",
+    "second",
+    "final",
+    "local",
+    "separate",
+    "seeded",
+}
+ENGLISH_ANCHOR_PATTERN = re.compile(
+    r"\b[A-Z][A-Za-z0-9]*(?:\s+[A-Za-z][A-Za-z0-9]*){0,3}\b"
 )
 FORBIDDEN_SUMMARY_PHRASES = (
     "主要涉及：",
@@ -152,6 +193,70 @@ class OutputProfile:
 
 
 @dataclass(frozen=True)
+class ReadingDecision:
+    """
+    输出层内部审查结果。
+    它只决定某条状态在阅读视图中的使用方式，不改变数据库中的 state。
+    """
+
+    state_id: int
+    # 被审查的状态编号。
+
+    role: str
+    # 状态在阅读视图中的角色。
+    # "standalone" 表示可独立输出。
+    # "supporting" 表示可作为其他阅读簇的支撑材料。
+    # "defer" 表示暂不输出，只进入内部诊断。
+
+    reason: str
+    # 中文理由。说明为什么采用该角色。
+
+    evidence_signals: tuple[str, ...]
+    # 本次判断使用到的证据信号。
+    # 例如：有证据 chunk、有明确主体、有明确对象、有相邻上下文、有事件线索。
+
+    missing_signals: tuple[str, ...]
+    # 暂不输出或不能独立输出时缺少的信号。
+    # 例如：缺少明确对象、缺少主体、缺少可解释上下文。
+
+
+@dataclass(frozen=True)
+class ReadingCluster:
+    """
+    阅读视图中的上下文簇。
+    它把若干状态组织到同一个读者可理解的上下文中。
+    它不是数据库事实，不改变任何 state 的主体字段。
+    """
+
+    cluster_id: str
+    # 输出层临时编号，只用于诊断和测试，不落库。
+
+    title: str
+    # 阅读簇标题。
+    # 应来自章节、文档标题、明确项目名、明确事件名或强锚点。
+
+    state_ids: tuple[int, ...]
+    # 被放进同一个阅读簇的状态编号。
+
+    primary_state_ids: tuple[int, ...]
+    # 构成该阅读簇主叙述的状态编号。
+
+    supporting_state_ids: tuple[int, ...]
+    # 只作为支撑材料的状态编号。
+
+    subject_identities: tuple[tuple[Optional[str], Optional[str]], ...]
+    # 阅读簇中出现过的主体身份。
+    # 多主体只表示共同出现在同一阅读上下文，不表示主体被合并。
+
+    merge_reasons: tuple[str, ...]
+    # 这些状态被放入同一阅读簇的理由。
+    # 例如：同一文档、相邻 chunk、同一章节、共享工具对象、共享事件线索。
+
+    risk_flags: tuple[str, ...]
+    # 可能误归组的风险提示。
+
+
+@dataclass(frozen=True)
 class ContextBundleState:
     state_id: int
     category: str
@@ -165,6 +270,14 @@ class ContextBundleState:
     evidence_excerpt: Optional[str] = None
     source_chunk_ids: tuple[int, ...] = ()
     strong_anchors: tuple[str, ...] = ()
+    reading_role: str = READING_ROLE_STANDALONE
+    # 该状态在阅读视图中的输出角色。
+    reading_reason: str = ""
+    # 输出角色的中文理由。
+    reading_evidence_signals: tuple[str, ...] = ()
+    # 支撑该输出角色判断的证据信号。
+    reading_missing_signals: tuple[str, ...] = ()
+    # 暂不输出或不能独立输出时缺少的信号。
 
 
 @dataclass(frozen=True)
@@ -178,6 +291,16 @@ class ContextBundle:
     sections: List[str]
     merge_basis: List[str]
     items: List[ContextBundleState]
+    primary_state_ids: tuple[int, ...] = ()
+    # 阅读簇主叙述状态编号。
+    supporting_state_ids: tuple[int, ...] = ()
+    # 阅读簇支撑材料状态编号。
+    subject_identities: tuple[tuple[Optional[str], Optional[str]], ...] = ()
+    # 该输出 bundle 中出现过的主体身份；不表示主体合并。
+    risk_flags: tuple[str, ...] = ()
+    # 输出层诊断用风险标记。
+    reading_cluster_id: Optional[str] = None
+    # output-only 阅读簇编号，不落库。
 
 
 @dataclass(frozen=True)
@@ -197,6 +320,10 @@ class NarrativeEvidenceItem:
     evidence_excerpt: Optional[str]
     source_chunk_ids: tuple[int, ...]
     strong_anchors: tuple[str, ...]
+    reading_role: str = READING_ROLE_STANDALONE
+    # 该证据项对应 state 在阅读视图中的输出角色。
+    reading_reason: str = ""
+    # 输出角色的中文理由。
 
 
 @dataclass(frozen=True)
@@ -287,16 +414,19 @@ def select_context_bundles_for_output(
                s.confidence,
                s.last_updated,
                se.chunk_id,
+               se.extraction_id,
                c.document_id,
                c.chunk_index,
                c.section_label,
                c.text AS chunk_text,
                d.path AS document_path,
-               d.title AS document_title
+               d.title AS document_title,
+               e.extraction_json
         FROM states s
         LEFT JOIN state_evidence se ON se.state_id = s.id
         LEFT JOIN chunks c ON se.chunk_id = c.id
         LEFT JOIN documents d ON c.document_id = d.id
+        LEFT JOIN extractions e ON se.extraction_id = e.id
         WHERE s.status = 'active'
         ORDER BY d.id, c.chunk_index, s.last_updated DESC, s.id
     """)
@@ -326,12 +456,14 @@ def select_context_bundles_for_output(
             state["evidence"].append(
                 {
                     "chunk_id": row["chunk_id"],
+                    "extraction_id": row["extraction_id"],
                     "document_id": row["document_id"],
                     "chunk_index": row["chunk_index"],
                     "section_label": row["section_label"],
                     "chunk_text": row["chunk_text"],
                     "document_path": row["document_path"],
                     "document_title": row["document_title"],
+                    "extraction_json": row["extraction_json"],
                 }
             )
 
@@ -343,31 +475,49 @@ def select_context_bundles_for_output(
         }
     )
     needs_context_items: List[ContextBundleState] = []
-    bundle_groups: Dict[tuple[Any, ...], List[Dict[str, Any]]] = {}
+    reading_decisions: Dict[int, ReadingDecision] = {}
+    document_groups: Dict[int, List[Dict[str, Any]]] = {}
 
     for state in states_by_id.values():
-        evidence = state["evidence"]
-        if not evidence:
+        decision = _review_single_state_readability(state)
+        state["reading_decision"] = decision
+        reading_decisions[state["state_id"]] = decision
+        if decision.role == READING_ROLE_DEFER:
             needs_context_items.append(
-                _context_state_from_row(state, "missing_evidence")
+                _context_state_from_row(
+                    state,
+                    _needs_context_reason_for_decision(decision),
+                )
             )
             continue
 
         primary_evidence = sorted(
-            evidence,
+            state["evidence"],
             key=lambda item: (item["document_id"], item["chunk_index"]),
         )[0]
-        group_key = (
-            primary_evidence["document_id"],
-            state["subject_type"] or "",
-            state["subject_key"] or "",
-        )
-        bundle_groups.setdefault(group_key, []).append(state)
+        document_groups.setdefault(primary_evidence["document_id"], []).append(state)
 
     candidate_groups: List[Dict[str, Any]] = []
-    for group_states in bundle_groups.values():
-        local_groups = _build_local_context_groups(group_states)
-        candidate_groups.extend(_merge_distant_strong_anchor_groups(local_groups))
+    for document_id, group_states in document_groups.items():
+        reading_clusters, deferred_states = _build_reading_clusters_for_document(
+            document_id,
+            group_states,
+        )
+        for state, reason in deferred_states:
+            needs_context_items.append(_context_state_from_row(state, reason))
+        for cluster in reading_clusters:
+            cluster_state_ids = set(cluster.state_ids)
+            candidate_groups.append(
+                {
+                    "states": [
+                        state
+                        for state in group_states
+                        if state["state_id"] in cluster_state_ids
+                    ],
+                    "merge_basis": list(cluster.merge_reasons),
+                    "reading_cluster": cluster,
+                }
+            )
 
     bundles = _finalize_context_bundles(
         candidate_groups,
@@ -376,6 +526,10 @@ def select_context_bundles_for_output(
     )
     bundles.sort(key=lambda bundle: (bundle.source_document, bundle.state_ids))
     diagnostics = _build_context_bundle_diagnostics(bundles, needs_context_items)
+    diagnostics["reading_roles"] = {
+        state_id: _reading_decision_payload(decision)
+        for state_id, decision in reading_decisions.items()
+    }
     log_event(
         logger,
         logging.INFO,
@@ -394,6 +548,252 @@ def select_context_bundles_for_output(
     )
 
 
+def _review_single_state_readability(state: Dict[str, Any]) -> ReadingDecision:
+    """审查单条 state 在没有同伴状态时是否可被读者独立理解。"""
+    evidence = state.get("evidence") or []
+    evidence_signals: List[str] = []
+    missing_signals: List[str] = []
+
+    if not evidence:
+        return ReadingDecision(
+            state_id=state["state_id"],
+            role=READING_ROLE_DEFER,
+            reason="状态没有可追溯证据",
+            evidence_signals=(),
+            missing_signals=("缺少证据链",),
+        )
+
+    if not any(item.get("chunk_id") and item.get("document_id") for item in evidence):
+        return ReadingDecision(
+            state_id=state["state_id"],
+            role=READING_ROLE_DEFER,
+            reason="状态不能回到原始上下文",
+            evidence_signals=(),
+            missing_signals=("缺少原始 chunk 或 document",),
+        )
+
+    evidence_signals.append("有证据 chunk")
+    evidence_signals.append("能回到 document")
+
+    has_subject = _has_explicit_subject(state)
+    has_object = bool(_state_object_anchors(state))
+    has_relation = _has_readable_relation(state)
+
+    if has_subject:
+        evidence_signals.append("有明确主体")
+    else:
+        missing_signals.append("缺少明确主体")
+
+    if has_object:
+        evidence_signals.append("有明确对象")
+    else:
+        missing_signals.append("缺少明确对象")
+
+    if has_relation:
+        evidence_signals.append("有可读关系")
+    else:
+        missing_signals.append("缺少可读关系")
+
+    if has_subject and has_object and has_relation:
+        role = _initial_reading_role_for_state(state)
+        reason = (
+            "主体、对象和关系足以独立阅读"
+            if role == READING_ROLE_STANDALONE
+            else "状态更适合作为阅读簇支撑材料"
+        )
+        return ReadingDecision(
+            state_id=state["state_id"],
+            role=role,
+            reason=reason,
+            evidence_signals=tuple(evidence_signals),
+            missing_signals=tuple(missing_signals),
+        )
+
+    if has_object and has_relation:
+        return ReadingDecision(
+            state_id=state["state_id"],
+            role=READING_ROLE_SUPPORTING,
+            reason="缺少明确主体，但对象和关系可支撑附近阅读簇",
+            evidence_signals=tuple(evidence_signals),
+            missing_signals=tuple(missing_signals),
+        )
+
+    return ReadingDecision(
+        state_id=state["state_id"],
+        role=READING_ROLE_DEFER,
+        reason="读者无法从当前状态恢复基本语义结构",
+        evidence_signals=tuple(evidence_signals),
+        missing_signals=tuple(missing_signals),
+    )
+
+
+def _initial_reading_role_for_state(state: Dict[str, Any]) -> str:
+    if state.get("subtype") in SUPPORTING_CONTEXT_SUBTYPES:
+        return READING_ROLE_SUPPORTING
+    return READING_ROLE_STANDALONE
+
+
+def _needs_context_reason_for_decision(decision: ReadingDecision) -> str:
+    if "缺少证据链" in decision.missing_signals:
+        return "missing_evidence"
+    if "缺少原始 chunk 或 document" in decision.missing_signals:
+        return "missing_source_context"
+    if "缺少明确对象" in decision.missing_signals:
+        return "missing_subject_or_object"
+    if "缺少明确主体" in decision.missing_signals:
+        return "missing_subject_or_object"
+    return "unreadable_single_state"
+
+
+def _reading_decision_payload(decision: ReadingDecision) -> Dict[str, Any]:
+    return {
+        "role": decision.role,
+        "reason": decision.reason,
+        "evidence_signals": list(decision.evidence_signals),
+        "missing_signals": list(decision.missing_signals),
+    }
+
+
+def _has_explicit_subject(state: Dict[str, Any]) -> bool:
+    subject_type = str(state.get("subject_type") or "").strip().lower()
+    subject_key = str(state.get("subject_key") or "").strip().lower()
+    if not subject_type or not subject_key:
+        return False
+    return subject_type not in {"unknown", "generic"} and subject_key not in {
+        "unknown",
+        "generic",
+        "unknown_or_generic",
+    }
+
+
+def _has_readable_relation(state: Dict[str, Any]) -> bool:
+    if state.get("subtype") in READABLE_RELATION_SUBTYPES:
+        text = " ".join(
+            part
+            for part in [
+                str(state.get("summary") or ""),
+                str(state.get("detail") or ""),
+                *_state_evidence_texts(state),
+            ]
+            if part
+        ).strip()
+        return bool(text)
+    return False
+
+
+def _state_object_anchors(state: Dict[str, Any]) -> set[str]:
+    anchors: set[str] = set()
+    for label in _state_section_labels(state):
+        cleaned = _clean_context_label(label)
+        if cleaned:
+            anchors.add(cleaned.lower())
+
+    text_parts = [
+        str(state.get("canonical_summary") or ""),
+        str(state.get("summary") or ""),
+        str(state.get("detail") or ""),
+        *_state_evidence_texts(state),
+    ]
+    for text in text_parts:
+        anchors.update(_named_anchors_from_text(text))
+
+    subject_key = str(state.get("subject_key") or "").strip().lower()
+    if subject_key:
+        anchors.discard(subject_key)
+    return anchors
+
+
+def _state_section_labels(state: Dict[str, Any]) -> set[str]:
+    return {
+        str(item.get("section_label") or "").strip()
+        for item in state.get("evidence", [])
+        if str(item.get("section_label") or "").strip()
+    }
+
+
+def _state_evidence_texts(state: Dict[str, Any]) -> List[str]:
+    texts = [
+        str(item.get("chunk_text") or "")
+        for item in state.get("evidence", [])
+        if item.get("chunk_text")
+    ]
+    for item in state.get("evidence", []):
+        texts.extend(_extraction_signal_texts(item.get("extraction_json")))
+    return texts
+
+
+def _extraction_signal_texts(extraction_json: Optional[str]) -> List[str]:
+    if not extraction_json:
+        return []
+    try:
+        payload = json.loads(extraction_json)
+    except (TypeError, ValueError):
+        return []
+
+    texts: List[str] = []
+    for key in ("entities", "events", "relation_candidates"):
+        values = payload.get(key) if isinstance(payload, dict) else None
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if isinstance(value, dict):
+                texts.extend(
+                    str(item)
+                    for item in value.values()
+                    if isinstance(item, (str, int, float))
+                )
+    return texts
+
+
+def _clean_context_label(value: str) -> str:
+    text = _clean_topic_title(value)
+    if not text:
+        return ""
+    if text.lower() in GENERIC_CONTEXT_LABELS:
+        return ""
+    return text
+
+
+def _named_anchors_from_text(text: str) -> set[str]:
+    anchors: set[str] = set()
+    if not text:
+        return anchors
+
+    anchors.update(match.group(0).lower() for match in ISSUE_ANCHOR_PATTERN.finditer(text))
+    anchors.update(match.group(0).lower() for match in MODEL_ANCHOR_PATTERN.finditer(text))
+    anchors.update(
+        match.group(1).strip().lower()
+        for match in BACKTICK_ANCHOR_PATTERN.finditer(text)
+        if match.group(1).strip()
+    )
+    for match in ENGLISH_ANCHOR_PATTERN.finditer(text):
+        candidate = re.sub(r"\s+", " ", match.group(0)).strip(" .。；;：:,，")
+        if not _is_useful_named_anchor(candidate):
+            continue
+        anchors.add(candidate.lower())
+    return anchors
+
+
+def _is_useful_named_anchor(candidate: str) -> bool:
+    if len(candidate) < 2:
+        return False
+    lowered = candidate.lower()
+    first_word = lowered.split()[0]
+    if first_word in CONNECTION_STOP_WORDS:
+        return False
+    if lowered in GENERIC_CONTEXT_LABELS:
+        return False
+    if "generic" in lowered:
+        return False
+    if len(candidate.split()) >= 2:
+        return True
+    return (
+        candidate.isupper()
+        or any(char.isdigit() for char in candidate)
+        or any(char.islower() for char in candidate[1:])
+    )
+
+
 def _context_state_from_row(
     row: Dict[str, Any],
     needs_context_reason: Optional[str] = None,
@@ -408,6 +808,22 @@ def _context_state_from_row(
     evidence_excerpt = None
     if evidence:
         evidence_excerpt = _shorten_text(str(evidence[0].get("chunk_text") or ""), 220)
+    decision = row.get("reading_decision")
+    if isinstance(decision, ReadingDecision):
+        reading_role = decision.role
+        reading_reason = decision.reason
+        evidence_signals = decision.evidence_signals
+        missing_signals = decision.missing_signals
+    elif needs_context_reason:
+        reading_role = READING_ROLE_DEFER
+        reading_reason = needs_context_reason
+        evidence_signals = ()
+        missing_signals = (needs_context_reason,)
+    else:
+        reading_role = READING_ROLE_STANDALONE
+        reading_reason = ""
+        evidence_signals = ()
+        missing_signals = ()
 
     return ContextBundleState(
         state_id=row["state_id"],
@@ -422,6 +838,10 @@ def _context_state_from_row(
         evidence_excerpt=evidence_excerpt,
         source_chunk_ids=source_chunk_ids,
         strong_anchors=tuple(sorted(_strong_anchors_for_state(row))),
+        reading_role=reading_role,
+        reading_reason=reading_reason,
+        reading_evidence_signals=evidence_signals,
+        reading_missing_signals=missing_signals,
     )
 
 
@@ -453,6 +873,264 @@ def _load_document_chunks(
     for row in cursor.fetchall():
         chunks_by_document.setdefault(row["document_id"], []).append(dict(row))
     return chunks_by_document
+
+
+def _build_reading_clusters_for_document(
+    document_id: int,
+    states: List[Dict[str, Any]],
+) -> tuple[List[ReadingCluster], List[tuple[Dict[str, Any], str]]]:
+    """在单个文档内形成 output-only 阅读簇，不改写 state 主体字段。"""
+    if not states:
+        return [], []
+
+    state_by_id = {state["state_id"]: state for state in states}
+    adjacency: Dict[int, set[int]] = {state["state_id"]: set() for state in states}
+    edge_reasons: Dict[tuple[int, int], set[str]] = {}
+
+    for left_index, left in enumerate(states):
+        for right in states[left_index + 1:]:
+            can_connect, reasons = _states_can_share_reading_cluster(left, right)
+            if not can_connect:
+                continue
+            left_id = left["state_id"]
+            right_id = right["state_id"]
+            adjacency[left_id].add(right_id)
+            adjacency[right_id].add(left_id)
+            edge_reasons[tuple(sorted((left_id, right_id)))] = set(reasons)
+
+    clusters: List[ReadingCluster] = []
+    deferred_states: List[tuple[Dict[str, Any], str]] = []
+    visited: set[int] = set()
+    for state in sorted(states, key=lambda item: item["state_id"]):
+        state_id = state["state_id"]
+        if state_id in visited:
+            continue
+
+        component_ids = _connected_component_ids(state_id, adjacency)
+        visited.update(component_ids)
+        component_states = [state_by_id[item_id] for item_id in sorted(component_ids)]
+        if len(component_states) == 1:
+            decision = component_states[0]["reading_decision"]
+            if decision.role in {READING_ROLE_STANDALONE, READING_ROLE_SUPPORTING}:
+                clusters.append(
+                    _reading_cluster_from_states(
+                        document_id,
+                        component_states,
+                        merge_reasons=(f"single_{decision.role}_state",),
+                    )
+                )
+            else:
+                deferred_states.append(
+                    (component_states[0], "supporting_state_without_cluster")
+                )
+            continue
+
+        merge_reasons: set[str] = {"reading_cluster"}
+        for left_id in component_ids:
+            for right_id in adjacency[left_id] & component_ids:
+                merge_reasons.update(edge_reasons.get(tuple(sorted((left_id, right_id))), set()))
+        clusters.append(
+            _reading_cluster_from_states(
+                document_id,
+                component_states,
+                merge_reasons=tuple(sorted(merge_reasons)),
+            )
+        )
+
+    return clusters, deferred_states
+
+
+def _connected_component_ids(start_id: int, adjacency: Dict[int, set[int]]) -> set[int]:
+    seen: set[int] = set()
+    pending = [start_id]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(sorted(adjacency.get(current, set()) - seen))
+    return seen
+
+
+def _reading_cluster_from_states(
+    document_id: int,
+    states: List[Dict[str, Any]],
+    merge_reasons: tuple[str, ...],
+) -> ReadingCluster:
+    """把已连通的一组 state 转成阅读簇诊断结构。"""
+    ordered_states = sorted(
+        states,
+        key=lambda state: (
+            min(item["chunk_index"] for item in state["evidence"]),
+            state["state_id"],
+        ),
+    )
+    primary_state_ids = tuple(
+        state["state_id"]
+        for state in ordered_states
+        if state["reading_decision"].role == READING_ROLE_STANDALONE
+    )
+    if not primary_state_ids:
+        primary_state_ids = (ordered_states[0]["state_id"],)
+    supporting_state_ids = tuple(
+        state["state_id"]
+        for state in ordered_states
+        if state["state_id"] not in primary_state_ids
+    )
+    subject_identities = tuple(
+        sorted(
+            {
+                (state.get("subject_type"), state.get("subject_key"))
+                for state in ordered_states
+                if state.get("subject_type") or state.get("subject_key")
+            }
+        )
+    )
+    risk_flags: List[str] = []
+    if len(subject_identities) > 1:
+        risk_flags.append("multiple_subjects_same_reading_cluster")
+
+    return ReadingCluster(
+        cluster_id=f"doc-{document_id}-cluster-{min(state['state_id'] for state in ordered_states)}",
+        title=_reading_cluster_title(ordered_states),
+        state_ids=tuple(state["state_id"] for state in ordered_states),
+        primary_state_ids=primary_state_ids,
+        supporting_state_ids=supporting_state_ids,
+        subject_identities=subject_identities,
+        merge_reasons=merge_reasons,
+        risk_flags=tuple(risk_flags),
+    )
+
+
+def _reading_cluster_title(states: List[Dict[str, Any]]) -> str:
+    shared_sections = _shared_context_labels(states)
+    for section in shared_sections:
+        return section
+
+    shared_anchors = _shared_reading_anchors(states)
+    for anchor in sorted(shared_anchors, key=lambda item: (-len(item), item)):
+        return _title_from_anchor(anchor)
+
+    first_evidence = sorted(
+        states[0]["evidence"],
+        key=lambda item: (item["document_id"], item["chunk_index"]),
+    )[0]
+    return (
+        first_evidence["document_title"]
+        or first_evidence["section_label"]
+        or Path(first_evidence["document_path"]).stem
+    )
+
+
+def _states_can_share_reading_cluster(
+    left: Dict[str, Any],
+    right: Dict[str, Any],
+) -> tuple[bool, tuple[str, ...]]:
+    """判断两条 state 是否可放进同一阅读簇，并返回中文可解释的依据键。"""
+    reasons: set[str] = set()
+    if _primary_document_id(left) != _primary_document_id(right):
+        return False, ()
+
+    shared_sections = _shared_context_labels([left, right])
+    shared_anchors = _reading_anchors_for_state(left) & _reading_anchors_for_state(right)
+    same_subject = _subject_identity(left) == _subject_identity(right) and _subject_identity(left) != (None, None)
+    adjacent = _states_are_adjacent(left, right)
+    distant_shared_anchor = bool(shared_anchors - _subject_anchor_values(left) - _subject_anchor_values(right))
+    subject_object_connection = _has_subject_object_connection(left, right)
+
+    if adjacent and (shared_sections or shared_anchors or same_subject):
+        reasons.add("local_adjacent_chunks")
+        if shared_sections:
+            reasons.add("shared_section")
+        if shared_anchors:
+            reasons.add("shared_reading_anchor")
+        if same_subject:
+            reasons.add("shared_subject_identity")
+
+    if not adjacent and distant_shared_anchor:
+        for anchor in sorted(
+            shared_anchors - _subject_anchor_values(left) - _subject_anchor_values(right)
+        ):
+            reasons.add(f"distant_strong_anchor:{anchor}")
+
+    if subject_object_connection:
+        reasons.add("subject_object_connection")
+
+    return bool(reasons), tuple(sorted(reasons))
+
+
+def _primary_document_id(state: Dict[str, Any]) -> Optional[int]:
+    evidence = state.get("evidence") or []
+    if not evidence:
+        return None
+    return sorted(evidence, key=lambda item: (item["document_id"], item["chunk_index"]))[0]["document_id"]
+
+
+def _states_are_adjacent(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    left_indexes = {item["chunk_index"] for item in left.get("evidence", [])}
+    right_indexes = {item["chunk_index"] for item in right.get("evidence", [])}
+    return any(
+        abs(left_index - right_index) <= NEIGHBOR_CHUNK_DISTANCE
+        for left_index in left_indexes
+        for right_index in right_indexes
+    )
+
+
+def _shared_context_labels(states: List[Dict[str, Any]]) -> List[str]:
+    label_sets = [
+        {
+            _clean_context_label(label)
+            for label in _state_section_labels(state)
+            if _clean_context_label(label)
+        }
+        for state in states
+    ]
+    if not label_sets:
+        return []
+    shared = set.intersection(*label_sets)
+    return sorted(shared)
+
+
+def _shared_reading_anchors(states: List[Dict[str, Any]]) -> set[str]:
+    anchor_sets = [_reading_anchors_for_state(state) for state in states]
+    if not anchor_sets:
+        return set()
+    return set.intersection(*anchor_sets)
+
+
+def _reading_anchors_for_state(state: Dict[str, Any]) -> set[str]:
+    anchors = set(_strong_anchors_for_state(state))
+    anchors.update(_state_object_anchors(state))
+    subject_type, subject_key = _subject_identity(state)
+    if subject_type and subject_key:
+        anchors.add(f"subject:{subject_type}:{subject_key}".lower())
+    return anchors
+
+
+def _subject_identity(state: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    subject_type = state.get("subject_type")
+    subject_key = state.get("subject_key")
+    if not subject_type and not subject_key:
+        return (None, None)
+    return (subject_type, subject_key)
+
+
+def _subject_anchor_values(state: Dict[str, Any]) -> set[str]:
+    subject_type, subject_key = _subject_identity(state)
+    if not subject_type or not subject_key:
+        return set()
+    return {f"subject:{subject_type}:{subject_key}".lower()}
+
+
+def _has_subject_object_connection(left: Dict[str, Any], right: Dict[str, Any]) -> bool:
+    left_subject = (left.get("subject_key") or "").strip().lower()
+    right_subject = (right.get("subject_key") or "").strip().lower()
+    left_anchors = _state_object_anchors(left)
+    right_anchors = _state_object_anchors(right)
+    return bool(
+        (left_subject and left_subject in right_anchors)
+        or (right_subject and right_subject in left_anchors)
+    )
 
 
 def _build_local_context_groups(states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -549,6 +1227,7 @@ def _finalize_context_bundles(
     bundles: List[ContextBundle] = []
     for group in groups:
         group_states = group["states"]
+        reading_cluster = group.get("reading_cluster")
         context_chunk_ids, context_basis = _complete_context_chunk_ids(
             group_states,
             document_chunks_by_id,
@@ -571,19 +1250,67 @@ def _finalize_context_bundles(
         })
         state_ids = [state["state_id"] for state in group_states]
         merge_basis = sorted(set(group["merge_basis"]) | set(context_basis))
+        subject_identities = (
+            reading_cluster.subject_identities
+            if isinstance(reading_cluster, ReadingCluster)
+            else tuple(
+                sorted(
+                    {
+                        (state.get("subject_type"), state.get("subject_key"))
+                        for state in group_states
+                        if state.get("subject_type") or state.get("subject_key")
+                    }
+                )
+            )
+        )
+        primary_state_ids = (
+            reading_cluster.primary_state_ids
+            if isinstance(reading_cluster, ReadingCluster)
+            else tuple(state_ids)
+        )
+        supporting_state_ids = (
+            reading_cluster.supporting_state_ids
+            if isinstance(reading_cluster, ReadingCluster)
+            else ()
+        )
         bundles.append(
             ContextBundle(
-                title=first_evidence["document_title"]
-                or first_evidence["section_label"]
-                or Path(first_evidence["document_path"]).stem,
+                title=(
+                    reading_cluster.title
+                    if isinstance(reading_cluster, ReadingCluster)
+                    else first_evidence["document_title"]
+                    or first_evidence["section_label"]
+                    or Path(first_evidence["document_path"]).stem
+                ),
                 source_document=first_evidence["document_path"],
-                subject_type=group_states[0]["subject_type"],
-                subject_key=group_states[0]["subject_key"],
+                subject_type=(
+                    group_states[0]["subject_type"]
+                    if len(subject_identities) <= 1
+                    else None
+                ),
+                subject_key=(
+                    group_states[0]["subject_key"]
+                    if len(subject_identities) <= 1
+                    else None
+                ),
                 state_ids=state_ids,
                 evidence_chunk_ids=context_chunk_ids,
                 sections=sections,
                 merge_basis=merge_basis,
                 items=[_context_state_from_row(state) for state in group_states],
+                primary_state_ids=primary_state_ids,
+                supporting_state_ids=supporting_state_ids,
+                subject_identities=subject_identities,
+                risk_flags=(
+                    reading_cluster.risk_flags
+                    if isinstance(reading_cluster, ReadingCluster)
+                    else ()
+                ),
+                reading_cluster_id=(
+                    reading_cluster.cluster_id
+                    if isinstance(reading_cluster, ReadingCluster)
+                    else None
+                ),
             )
         )
 
@@ -623,6 +1350,10 @@ def _is_reliable_context_group(
     states: List[Dict[str, Any]],
     context_chunk_ids: List[int],
 ) -> bool:
+    if len(states) == 1:
+        decision = states[0].get("reading_decision")
+        if isinstance(decision, ReadingDecision) and decision.role == READING_ROLE_STANDALONE:
+            return bool(context_chunk_ids)
     return len(states) >= 2 or len(context_chunk_ids) >= 2
 
 
@@ -688,8 +1419,24 @@ def _build_context_bundle_diagnostics(
 
     return {
         "bundle_count": len(bundles),
+        "reading_cluster_count": len(bundles),
         "bundle_state_counts": [len(bundle.state_ids) for bundle in bundles],
         "bundle_merge_basis": [bundle.merge_basis for bundle in bundles],
+        "reading_clusters": [
+            {
+                "cluster_id": bundle.reading_cluster_id,
+                "title": bundle.title,
+                "state_ids": list(bundle.state_ids),
+                "primary_state_ids": list(bundle.primary_state_ids),
+                "supporting_state_ids": list(bundle.supporting_state_ids),
+                "subject_identities": [
+                    list(identity) for identity in bundle.subject_identities
+                ],
+                "merge_reasons": list(bundle.merge_basis),
+                "risk_flags": list(bundle.risk_flags),
+            }
+            for bundle in bundles
+        ],
         "needs_context_count": len(needs_context_items),
         "needs_context_reasons": needs_context_reasons,
         "large_bundles": [
@@ -782,10 +1529,6 @@ def build_bundle_narratives(
         "narrative_count": len(narratives),
         "narrative_section_count": sum(len(item.sections) for item in narratives),
         "weak_title_candidate_count": weak_title_candidate_count,
-        "low_information_omitted_count": omitted_reason_counts.get(
-            "low_information_evaluation",
-            0,
-        ),
         "omitted_reason_counts": omitted_reason_counts,
         "llm_success_count": llm_success_count,
         "llm_failure_count": llm_failure_count,
@@ -823,7 +1566,12 @@ def _candidate_topic_bundles_from_selection(
     for bundle in selection.bundles:
         subject_label = _subject_label_for_bundle(bundle)
         for item in bundle.items:
-            topic_key, topic_title_hint, basis = _topic_key_for_item(item, bundle)
+            if bundle.supporting_state_ids or len(bundle.subject_identities) > 1:
+                topic_key = f"cluster:{bundle.reading_cluster_id or bundle.title.lower()}"
+                topic_title_hint = bundle.title
+                basis = "topic_reading_cluster"
+            else:
+                topic_key, topic_title_hint, basis = _topic_key_for_item(item, bundle)
             group_key = (subject_label, bundle.source_document, topic_key)
             group = groups.setdefault(
                 group_key,
@@ -851,6 +1599,8 @@ def _candidate_topic_bundles_from_selection(
                     evidence_excerpt=item.evidence_excerpt,
                     source_chunk_ids=item.source_chunk_ids,
                     strong_anchors=item.strong_anchors,
+                    reading_role=item.reading_role,
+                    reading_reason=item.reading_reason,
                 )
             )
 
@@ -886,6 +1636,8 @@ def _candidate_topic_bundles_from_selection(
 
 
 def _subject_label_for_bundle(bundle: ContextBundle) -> str:
+    if len(bundle.subject_identities) > 1:
+        return bundle.title or Path(bundle.source_document).stem
     if bundle.subject_key:
         return bundle.subject_key
     if bundle.subject_type:
@@ -946,10 +1698,6 @@ def _build_rule_bundle_narrative(candidate: CandidateTopicBundle) -> BundleNarra
     topic_title = _rule_topic_title(candidate)
 
     for item in candidate.evidence_items:
-        if _should_omit_low_information_item(item, candidate):
-            omitted.append(OmittedNarrativeState(item.state_id, "low_information_evaluation"))
-            continue
-
         text = _fact_sentence_for_item(item)
         if not text:
             omitted.append(OmittedNarrativeState(item.state_id, "too_vague"))
@@ -1084,31 +1832,13 @@ def _fact_sentence_for_item(item: NarrativeEvidenceItem) -> str:
     return _ensure_sentence(_shorten_text(text, 220))
 
 
-def _should_omit_low_information_item(
-    item: NarrativeEvidenceItem,
-    candidate: CandidateTopicBundle,
-) -> bool:
-    texts = [item.summary, item.detail or "", item.evidence_excerpt or ""]
-    if not any(_looks_like_low_information_evaluation(text) for text in texts):
-        return False
-    return len(candidate.evidence_items) == 1
-
-
-def _looks_like_low_information_evaluation(text: str) -> bool:
-    compact = re.sub(r"\s+", "", text)
-    if not compact:
-        return True
-    has_hint = any(hint in compact for hint in LOW_INFORMATION_EVALUATION_HINTS)
-    return has_hint and len(compact) <= 48
-
-
 def _is_weak_child_text(text: str) -> bool:
     stripped = re.sub(r"\s+", "", text)
     if not stripped:
         return True
     if stripped in WEAK_TOPIC_TITLES:
         return True
-    return _looks_like_low_information_evaluation(text) and len(stripped) <= 16
+    return False
 
 
 def _texts_are_redundant(left: str, right: str) -> bool:

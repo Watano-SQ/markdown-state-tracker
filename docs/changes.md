@@ -6,6 +6,30 @@
 
 ### 决策
 
+修订 active reading-view spec/plan，新增 `output_reading_roles_and_clusters` 作为 output-only 阅读角色与阅读簇修正任务。
+
+- Decision:
+  - 保持 active 文件为 `docs/specs/contextual_bundle_reading_view.md` 与 `docs/plans/contextual_bundle_reading_view.md`，在其中记录任务名 `output_reading_roles_and_clusters`
+  - 废弃把短句或评价句作为“低信息评价类 state”处理的正式内部分类，改为“短语用状态 + 输出角色审查”
+  - 新增 output-only `ReadingDecision` 设计：每条 state 在阅读视图中只能是 `standalone`、`supporting` 或 `defer`
+  - 新增“单状态可读性审查”：按证据链、主体、对象、可读关系和上下文决定输出角色
+  - 新增 output-only `ReadingCluster` 设计：阅读簇可以包含多个主体，但不改变任何 state 的 `subject_type` / `subject_key`
+  - 预留 `OUTPUT_READING_REVIEW_MODE=rule|llm|auto`，但默认规则模式；LLM 只能审查角色或归组，不生成新事实
+- Why:
+  - 真实输出中短评价、短阻塞、短决策和短计划不应因句子短小被降级；是否输出应由阅读角色和上下文可解释性决定
+  - Aurora Board、River import incident 等多主体上下文需要 output layer 的临时阅读簇，而不是主体合并或 state identity 改写
+- Implemented:
+  - `layers/output_layer.py` 新增 output-only `ReadingDecision` 与 `ReadingCluster`，并将阅读角色、阅读簇、主体身份和风险提示纳入 output diagnostics
+  - selection 阶段先做单状态可读性审查，再按同文档、相邻 chunk、共享章节、共享对象/事件线索、强锚点和主体—对象连接形成阅读簇
+  - 多主体阅读簇保留全部主体身份；正式输出不把簇写回 state 的 `subject_type` / `subject_key`
+  - 移除输出 narrative 中旧式 `low_information_evaluation` 省略逻辑；短语用状态通过 role 判断进入独立输出、支撑材料或内部诊断
+  - `tests/test_output_layer.py` 覆盖短评价、缺主体/对象短句、短阻塞、Aurora Board、River import incident 和防误合并回归样例
+- Not changed:
+  - 未修改 `db/schema.py`、aggregator、middle layer、extractor prompt、extraction JSON schema 或 audit 工具
+  - 未实现 schema、关系持久化、retrieval 生命周期裁决、主体注册表或 LLM 默认依赖
+
+### 决策
+
 校准 `tools/observation_support_audit.py` 的状态主体视角归因诊断，但不改变 pipeline 准入语义。
 
 - Decision:
