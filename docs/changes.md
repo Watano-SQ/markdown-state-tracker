@@ -2,6 +2,24 @@
 >本文档应当按照日期倒序来写，也即最新日期在前。
 
 
+## 2026-05-09
+
+### 决策
+
+校准 `tools/observation_support_audit.py` 的状态主体视角归因诊断，但不改变 pipeline 准入语义。
+
+- Decision:
+  - 在 `subject_grounding` 中新增 `subject_attribution_type`，区分 `explicit_subject`、`perspective_subject`、`project_subject`、`context_only_subject`、`unknown_or_generic_subject`、`missing_subject`
+  - 新增第一人称视角、通用建议、教程知识、第三方陈述、项目主体覆盖等轻量规则字段与 risk/support flags
+  - 当 `subject_key == document_author` 且正文存在第一人称行动/状态线索时，audit 标记为 `perspective_subject`，不再仅因 subject 来自 document_author 判为 risky
+  - 当通用建议、教程知识、第三方陈述或项目主体被归到 document_author 时，audit 继续标记为主体归因风险
+- Why:
+  - `document_author` 既可能只是 metadata，也可能在第一人称个人记录中作为“我”的解析锚点；audit 需要先区分这两类情况，再决定是否后续调整 prompt 或 aggregator
+- Not changed:
+  - 未修改 `states`、`state_evidence`、`state_candidate_supports` schema
+  - 未修改 aggregator 准入、prompt、relation persistence、retrieval lifecycle 或 output layer
+
+
 ## 2026-05-08
 
 ### 决策

@@ -236,6 +236,98 @@ def _collect_missing_terms(text: str, candidate_text: str) -> List[str]:
 # ── per-dimension audit functions ────────────────────────────────────────────
 
 
+def _find_first_person_cues(text: str) -> List[str]:
+    """Return lightweight first-person perspective cues in chunk text."""
+    if not text:
+        return []
+    cues = [
+        "本周我",
+        "最近我",
+        "我正在",
+        "我完成了",
+        "我计划",
+        "我希望",
+        "我偏好",
+        "我不喜欢",
+        "对我来说",
+        "我的",
+        "本人",
+        "我们",
+        "我",
+    ]
+    found = [cue for cue in cues if cue in text]
+
+    lower = text.lower()
+    english_patterns = [
+        (r"\bi\b", "I"),
+        (r"\bmy\b", "my"),
+        (r"\bwe\b", "we"),
+        (r"\bi\s+(am|was|plan|hope|prefer|finished|completed|working)\b", "I-action"),
+    ]
+    for pattern, label in english_patterns:
+        if re.search(pattern, lower):
+            found.append(label)
+    return list(dict.fromkeys(found))
+
+
+def _has_generic_advice_cue(text: str) -> bool:
+    if not text:
+        return False
+    return any(cue in text for cue in [
+        "可以先",
+        "再考虑",
+        "建议",
+        "应该",
+        "最好",
+        "优先",
+        "不妨",
+        "适合",
+    ]) or bool(re.search(r"\b(should|could|recommend|better to|best to)\b", text.lower()))
+
+
+def _has_tutorial_knowledge_cue(text: str) -> bool:
+    if not text:
+        return False
+    return any(cue in text for cue in [
+        "可以用",
+        "用于",
+        "用来",
+        "通常",
+        "一般",
+        "SQLite 可以",
+        "外键",
+        "教程",
+        "方法",
+        "保存状态证据链",
+    ]) or bool(re.search(r"\b(can use|is used to|usually|generally|foreign key)\b", text.lower()))
+
+
+def _has_quote_or_third_party_cue(text: str, doc_author: str = "") -> bool:
+    if not text:
+        return False
+    for match in re.finditer(r"([\u4e00-\u9fff]{2,8})(认为|表示|提醒|说|提到|建议)", text):
+        speaker = match.group(1)
+        if speaker not in ("我", "我们", "本人") and (
+            not doc_author or _normalize(speaker) != _normalize(doc_author)
+        ):
+            return True
+    return any(cue in text.lower() for cue in ["according to", "said that", "argued that"])
+
+
+def _has_project_subject_cue(text: str, subject_key: str = "") -> bool:
+    if not text:
+        return False
+    if subject_key and _contains(text, subject_key):
+        return True
+    project_patterns = [
+        r"\b[A-Z][A-Za-z0-9_-]+(?:\s+[A-Z][A-Za-z0-9_-]+)+\b",
+        r"\b\w*(?:Tracker|Project|System|Tool|App|CLI)\b",
+    ]
+    if any(re.search(pattern, text) for pattern in project_patterns):
+        return True
+    return any(cue in text for cue in ["项目", "工具", "系统", "平台", "Markdown State Tracker"])
+
+
 def audit_subject_grounding(
     candidate: Dict[str, Any],
     chunk_text: str,
@@ -247,10 +339,24 @@ def audit_subject_grounding(
 ) -> Dict[str, Any]:
     subject_type = _display(candidate.get("subject_type"))
     subject_key = _display(candidate.get("subject_key"))
+    doc_author = _display(context.get("document_author"))
+    perspective_cues = _find_first_person_cues(chunk_text)
+    has_first_person_cue = bool(perspective_cues)
+    has_generic_advice_cue = _has_generic_advice_cue(chunk_text)
+    has_tutorial_knowledge_cue = _has_tutorial_knowledge_cue(chunk_text)
+    has_quote_or_third_party_cue = _has_quote_or_third_party_cue(chunk_text, doc_author)
+    support_flags: List[str] = []
     if not subject_key:
         return {
             "subject_type": subject_type,
             "subject_key": "",
+            "subject_attribution_type": "missing_subject",
+            "perspective_cues": perspective_cues,
+            "uses_document_author_as_perspective_anchor": False,
+            "has_first_person_cue": has_first_person_cue,
+            "has_generic_advice_cue": has_generic_advice_cue,
+            "has_tutorial_knowledge_cue": has_tutorial_knowledge_cue,
+            "has_quote_or_third_party_cue": has_quote_or_third_party_cue,
             "found_in_chunk_text": False,
             "found_in_entities": False,
             "found_in_event_participants": False,
@@ -258,6 +364,7 @@ def audit_subject_grounding(
             "found_in_context_only": False,
             "found_only_in_context": False,
             "entity_type_matches_subject_type": False,
+            "support_flags": support_flags,
             "risk_flags": ["missing_subject_key"],
         }
 
@@ -278,7 +385,6 @@ def audit_subject_grounding(
     )
 
     # context / context_only checks
-    doc_author = _display(context.get("document_author"))
     found_in_doc_author = bool(doc_author and _normalize(doc_author) == _normalize(subject_key))
 
     ctx_blocks_text = " ".join(
@@ -303,6 +409,35 @@ def audit_subject_grounding(
         or any(_normalize(t) == _normalize(subject_type) for t in subject_entity_types)
     )
 
+    normalized_subject_type = _normalize(subject_type)
+    subject_is_document_author = found_in_doc_author and normalized_subject_type in ("", "person")
+    uses_document_author_as_perspective_anchor = (
+        subject_is_document_author and has_first_person_cue and not in_observation
+    )
+    project_subject_visible = normalized_subject_type in {"project", "organization", "org", "team", "tool"} and (
+        found_in_chunk_text or found_in_entities
+    )
+    project_cue_without_author = (
+        subject_is_document_author
+        and not has_first_person_cue
+        and _has_project_subject_cue(chunk_text, "")
+        and not found_in_chunk_text
+    )
+
+    if project_subject_visible:
+        subject_attribution_type = "project_subject"
+    elif in_observation:
+        subject_attribution_type = "explicit_subject"
+    elif uses_document_author_as_perspective_anchor:
+        subject_attribution_type = "perspective_subject"
+        support_flags.append("document_author_supported_by_first_person_perspective")
+    elif has_generic_advice_cue or has_tutorial_knowledge_cue or has_quote_or_third_party_cue:
+        subject_attribution_type = "unknown_or_generic_subject"
+    elif found_only_in_context:
+        subject_attribution_type = "context_only_subject"
+    else:
+        subject_attribution_type = "unknown_or_generic_subject"
+
     risk_flags: List[str] = []
     if not found_in_chunk_text:
         risk_flags.append("subject_not_in_chunk_text")
@@ -312,12 +447,30 @@ def audit_subject_grounding(
         risk_flags.append("subject_only_in_context")
     if found_in_doc_author and not found_in_chunk_text and not found_in_entities:
         risk_flags.append("document_author_used_as_subject_without_text_support")
+        if not has_first_person_cue:
+            risk_flags.append("no_perspective_cue_for_author_subject")
+    if subject_is_document_author and has_generic_advice_cue:
+        risk_flags.append("generic_statement_misattributed_to_author")
+        risk_flags.append("advice_misattributed_to_author")
+    if subject_is_document_author and has_tutorial_knowledge_cue:
+        risk_flags.append("tutorial_knowledge_misattributed_to_author")
+    if subject_is_document_author and has_quote_or_third_party_cue:
+        risk_flags.append("third_party_statement_misattributed_to_author")
+    if project_cue_without_author:
+        risk_flags.append("project_subject_overridden_by_document_author")
     if subject_type and subject_entity_types and not entity_type_matches:
         risk_flags.append("subject_type_entity_type_conflict")
 
     return {
         "subject_type": subject_type,
         "subject_key": subject_key,
+        "subject_attribution_type": subject_attribution_type,
+        "perspective_cues": perspective_cues,
+        "uses_document_author_as_perspective_anchor": uses_document_author_as_perspective_anchor,
+        "has_first_person_cue": has_first_person_cue,
+        "has_generic_advice_cue": has_generic_advice_cue,
+        "has_tutorial_knowledge_cue": has_tutorial_knowledge_cue,
+        "has_quote_or_third_party_cue": has_quote_or_third_party_cue,
         "found_in_chunk_text": found_in_chunk_text,
         "found_in_entities": found_in_entities,
         "found_in_event_participants": found_in_event_participants,
@@ -325,6 +478,7 @@ def audit_subject_grounding(
         "found_in_context_only": found_in_context_blocks,
         "found_only_in_context": found_only_in_context,
         "entity_type_matches_subject_type": entity_type_matches,
+        "support_flags": support_flags,
         "risk_flags": risk_flags,
     }
 
@@ -591,8 +745,10 @@ def audit_context_grounding(
     uses_document_time = bool(doc_time and doc_time in candidate_text)
     uses_section = bool(section and section in candidate_text)
     uses_source_context_blocks = False
+    has_first_person_cue = bool(_find_first_person_cues(chunk_text))
 
     risk_flags: List[str] = []
+    support_flags: List[str] = []
 
     # source_context_blocks analysis
     ctx_blocks_text = " ".join(
@@ -615,8 +771,10 @@ def audit_context_grounding(
 
     if uses_document_title:
         risk_flags.append("document_title_driven_candidate")
-    if uses_document_author and not _contains(chunk_text, subject_key):
+    if uses_document_author and not _contains(chunk_text, subject_key) and not has_first_person_cue:
         risk_flags.append("document_author_driven_subject")
+    elif uses_document_author and not _contains(chunk_text, subject_key) and has_first_person_cue:
+        support_flags.append("document_author_supported_by_first_person_perspective")
     if uses_document_time and not _contains(chunk_text, doc_time):
         risk_flags.append("document_time_overused")
     if uses_section and not _weak_overlap(chunk_text, summary):
@@ -629,6 +787,7 @@ def audit_context_grounding(
         "uses_section": uses_section,
         "uses_source_context_blocks": uses_source_context_blocks,
         "context_only_support": context_only_support,
+        "support_flags": support_flags,
         "risk_flags": risk_flags,
     }
 
@@ -642,17 +801,30 @@ def compute_overall_grounding(
     context: Dict[str, Any],
 ) -> Dict[str, Any]:
     all_risks: List[str] = []
+    all_supports: List[str] = []
     for dim in [subject, text, event, relation, retrieval, context]:
         all_risks.extend(dim.get("risk_flags", []))
+        all_supports.extend(dim.get("support_flags", []))
 
     # ── decide level ──
     context_only_only = "context_only_only" in all_risks
+    severe_attribution_risks = {
+        "no_perspective_cue_for_author_subject",
+        "generic_statement_misattributed_to_author",
+        "tutorial_knowledge_misattributed_to_author",
+        "advice_misattributed_to_author",
+        "third_party_statement_misattributed_to_author",
+        "project_subject_overridden_by_document_author",
+    }
+    has_severe_attribution_risk = bool(severe_attribution_risks.intersection(all_risks))
     text_none = text.get("summary_support") == "none"
     text_weak = text.get("summary_support") == "weak"
     text_strong = text.get("summary_support") == "strong"
     subject_in_text = subject.get("found_in_chunk_text", False)
     subject_in_entities = subject.get("found_in_entities", False)
     subject_only_ctx = subject.get("found_only_in_context", False)
+    subject_attribution_type = subject.get("subject_attribution_type", "")
+    perspective_subject = subject_attribution_type == "perspective_subject"
     event_none = event.get("event_support") == "none"
     event_action = event.get("action_supported_by_event", False)
     time_conflict = "candidate_time_conflicts_with_event_time" in all_risks
@@ -662,12 +834,18 @@ def compute_overall_grounding(
     level = "medium"
     reasons: List[str] = []
 
-    if subject_in_text and text_strong and (event_action or relation.get("supports_subject_object_link")):
+    if has_severe_attribution_risk:
+        level = "risky"
+        reasons.append("主体归因缺少 observation 支撑，且存在 document_author 误用风险")
+    elif subject_in_text and text_strong and (event_action or relation.get("supports_subject_object_link")):
         level = "strong"
         reasons.append("主体、动作和对象均能回到正文与 observation;")
     elif context_only_only:
         level = "risky"
         reasons.append("关键信息只存在于 context_only 材料中")
+    elif perspective_subject:
+        level = "medium"
+        reasons.append("主体未显式出现在正文，但由第一人称视角 + document_author 支撑")
     elif subject_only_ctx:
         level = "risky"
         reasons.append("主体只来自 context，chunk text 无支撑")
@@ -693,6 +871,7 @@ def compute_overall_grounding(
         "level": level,
         "main_reason": main_reason,
         "risk_flags": all_risks,
+        "support_flags": all_supports,
     }
 
 
@@ -845,15 +1024,24 @@ def print_text_report(items: List[Dict[str, Any]]) -> None:
         print(f"  admission: {info['current_support_decision']} ({info['current_support_reason']})")
         print(f"  overall grounding: {overall['level']} — {overall['main_reason'][:160]}")
         print(f"  risk flags: {_fmt_list(overall['risk_flags'])}")
+        if overall.get("support_flags"):
+            print(f"  support flags: {_fmt_list(overall['support_flags'])}")
         print(f"  cross-check: {cross['audit_judgment']} — {cross['note'][:160]}")
         print()
 
         # detailed dimensions (abbreviated)
         print(f"  Subject grounding:")
+        print(f"    attribution: {subject.get('subject_attribution_type', 'unknown')}  "
+              f"first_person: {_yes(subject.get('has_first_person_cue', False))}  "
+              f"author_anchor: {_yes(subject.get('uses_document_author_as_perspective_anchor', False))}")
+        if subject.get("perspective_cues"):
+            print(f"    perspective cues: {_fmt_list(subject['perspective_cues'])}")
         print(f"    in chunk_text: {_yes(subject['found_in_chunk_text'])}  "
               f"in entities: {_yes(subject['found_in_entities'])}  "
               f"in events: {_yes(subject['found_in_event_participants'])}  "
               f"in relations: {_yes(subject['found_in_relation_candidates'])}")
+        if subject.get("support_flags"):
+            print(f"    supports: {_fmt_list(subject['support_flags'])}")
         if subject["risk_flags"]:
             print(f"    risks: {_fmt_list(subject['risk_flags'])}")
 
@@ -967,9 +1155,21 @@ def print_markdown_report(items: List[Dict[str, Any]]) -> None:
         print(f"- **current admission**: {info['current_support_decision']}"
               f" ({info['current_support_reason']})")
         print(f"- **overall grounding**: **{overall['level']}** — {overall['main_reason']}")
+        if overall.get("support_flags"):
+            print(f"- **support_flags**: {_fmt_list(overall['support_flags'])}")
         print()
 
         _md_section("Subject grounding", subject, [
+            ("subject attribution type", subject.get("subject_attribution_type", "unknown")),
+            ("perspective cues", _fmt_list(subject.get("perspective_cues", []))),
+            (
+                "uses document_author as perspective anchor",
+                subject.get("uses_document_author_as_perspective_anchor", False),
+            ),
+            ("has first-person cue", subject.get("has_first_person_cue", False)),
+            ("has generic advice cue", subject.get("has_generic_advice_cue", False)),
+            ("has tutorial knowledge cue", subject.get("has_tutorial_knowledge_cue", False)),
+            ("has quote or third-party cue", subject.get("has_quote_or_third_party_cue", False)),
             ("subject_key in chunk_text", subject["found_in_chunk_text"]),
             ("subject_key in entities", subject["found_in_entities"]),
             ("subject_key in event participants", subject["found_in_event_participants"]),
@@ -978,6 +1178,9 @@ def print_markdown_report(items: List[Dict[str, Any]]) -> None:
             ("found only in context", subject["found_only_in_context"]),
             ("entity_type matches subject_type", subject["entity_type_matches_subject_type"]),
         ])
+        if subject.get("support_flags"):
+            print(f"  - **support_flags**: {_fmt_list(subject['support_flags'])}")
+        _md_risks(subject["risk_flags"])
 
         _md_section("Text grounding", text, [
             ("summary support", text["summary_support"]),

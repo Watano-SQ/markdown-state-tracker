@@ -40,6 +40,38 @@ from tools.observation_support_audit import (  # noqa: E402
 )
 
 
+def _audit_all(candidate, chunk_text, context=None, entities=None, events=None,
+               relations=None, retrievals=None, source_context_blocks=None):
+    context = context or {}
+    entities = entities or []
+    events = events or []
+    relations = relations or []
+    retrievals = retrievals or []
+    source_context_blocks = source_context_blocks or []
+    subject_g = audit_subject_grounding(
+        candidate, chunk_text, entities, events, relations, context, source_context_blocks,
+    )
+    text_g = audit_text_grounding(candidate, chunk_text)
+    event_g = audit_event_grounding(candidate, events, chunk_text)
+    relation_g = audit_relation_grounding(candidate, relations)
+    retrieval_g = audit_retrieval_grounding(candidate, retrievals, chunk_text)
+    context_g = audit_context_grounding(
+        candidate, context, source_context_blocks, chunk_text,
+    )
+    overall = compute_overall_grounding(
+        subject_g, text_g, event_g, relation_g, retrieval_g, context_g,
+    )
+    return {
+        "subject": subject_g,
+        "text": text_g,
+        "event": event_g,
+        "relation": relation_g,
+        "retrieval": retrieval_g,
+        "context": context_g,
+        "overall": overall,
+    }
+
+
 # ── lightweight helpers tests ─────────────────────────────────────────────────
 
 
@@ -466,6 +498,141 @@ class CaseERetrievalAmbiguityTests(unittest.TestCase):
         )
         # with ambiguity + text support, could be medium or risky
         self.assertIn(overall["level"], ("medium", "risky", "weak"))
+
+
+# ── Cases F-J: subject perspective attribution ───────────────────────────────
+
+
+class SubjectPerspectiveAttributionTests(unittest.TestCase):
+    def test_case_f_document_author_supported_by_first_person_perspective(self):
+        chunk_text = "我最近在推进 Markdown State Tracker 的输出层整理。"
+        context = {"document_author": "sq", "document_mode": "personal"}
+        candidate = {
+            "summary": "sq 正在推进 Markdown State Tracker 的输出层整理",
+            "subject_type": "person",
+            "subject_key": "sq",
+            "category": "dynamic",
+            "subtype": "ongoing_project",
+        }
+
+        result = _audit_all(candidate, chunk_text, context=context)
+        subject = result["subject"]
+        overall = result["overall"]
+
+        self.assertEqual(subject["subject_attribution_type"], "perspective_subject")
+        self.assertTrue(subject["has_first_person_cue"])
+        self.assertTrue(subject["uses_document_author_as_perspective_anchor"])
+        self.assertIn(
+            "document_author_supported_by_first_person_perspective",
+            subject["support_flags"],
+        )
+        self.assertNotIn(
+            "no_perspective_cue_for_author_subject",
+            subject["risk_flags"],
+        )
+        self.assertNotIn(overall["level"], ("risky", "inconsistent"))
+
+    def test_case_g_generic_advice_not_attributed_to_document_author(self):
+        chunk_text = "可以先把字段整理成表格，再考虑是否自动化。"
+        context = {"document_author": "sq", "document_mode": "personal"}
+        candidate = {
+            "summary": "sq 正在整理字段",
+            "subject_type": "person",
+            "subject_key": "sq",
+            "category": "dynamic",
+            "subtype": "active_interest",
+        }
+
+        result = _audit_all(candidate, chunk_text, context=context)
+        subject = result["subject"]
+        overall = result["overall"]
+
+        self.assertIn(
+            subject["subject_attribution_type"],
+            ("context_only_subject", "unknown_or_generic_subject"),
+        )
+        self.assertTrue(subject["has_generic_advice_cue"])
+        self.assertIn("no_perspective_cue_for_author_subject", subject["risk_flags"])
+        self.assertTrue(
+            {
+                "advice_misattributed_to_author",
+                "generic_statement_misattributed_to_author",
+            }.intersection(subject["risk_flags"])
+        )
+        self.assertIn(overall["level"], ("risky", "inconsistent"))
+
+    def test_case_h_tutorial_knowledge_not_attributed_to_document_author(self):
+        chunk_text = "SQLite 可以用外键保存状态证据链。"
+        context = {"document_author": "sq"}
+        candidate = {
+            "summary": "sq 掌握 SQLite 外键保存状态证据链",
+            "subject_type": "person",
+            "subject_key": "sq",
+            "category": "static",
+            "subtype": "skill",
+        }
+
+        result = _audit_all(candidate, chunk_text, context=context)
+        subject = result["subject"]
+        overall = result["overall"]
+
+        self.assertTrue(subject["has_tutorial_knowledge_cue"])
+        self.assertIn("tutorial_knowledge_misattributed_to_author", subject["risk_flags"])
+        self.assertIn(overall["level"], ("risky", "inconsistent"))
+
+    def test_case_i_project_subject_not_overridden_by_document_author(self):
+        chunk_text = "Markdown State Tracker 当前已经支持 state_candidate_supports。"
+        context = {"document_author": "sq"}
+        wrong_candidate = {
+            "summary": "sq 支持 state_candidate_supports",
+            "subject_type": "person",
+            "subject_key": "sq",
+            "category": "dynamic",
+            "subtype": "ongoing_project",
+        }
+        correct_candidate = {
+            "summary": "Markdown State Tracker 当前支持 state_candidate_supports",
+            "subject_type": "project",
+            "subject_key": "Markdown State Tracker",
+            "category": "static",
+            "subtype": "background",
+        }
+
+        wrong = _audit_all(wrong_candidate, chunk_text, context=context)
+        self.assertIn(
+            "project_subject_overridden_by_document_author",
+            wrong["subject"]["risk_flags"],
+        )
+        self.assertIn(wrong["overall"]["level"], ("risky", "inconsistent"))
+
+        correct = _audit_all(correct_candidate, chunk_text, context=context)
+        self.assertEqual(correct["subject"]["subject_attribution_type"], "project_subject")
+        self.assertIn(correct["overall"]["level"], ("medium", "strong"))
+
+    def test_case_j_third_party_statement_not_attributed_to_document_author(self):
+        chunk_text = "张三认为这个项目需要重构。"
+        context = {"document_author": "sq"}
+        wrong_candidate = {
+            "summary": "sq 认为这个项目需要重构",
+            "subject_type": "person",
+            "subject_key": "sq",
+        }
+        correct_candidate = {
+            "summary": "张三认为这个项目需要重构",
+            "subject_type": "person",
+            "subject_key": "张三",
+        }
+
+        wrong = _audit_all(wrong_candidate, chunk_text, context=context)
+        self.assertIn(
+            "third_party_statement_misattributed_to_author",
+            wrong["subject"]["risk_flags"],
+        )
+        self.assertIn(wrong["overall"]["level"], ("risky", "inconsistent"))
+
+        correct = _audit_all(correct_candidate, chunk_text, context=context)
+        self.assertEqual(correct["subject"]["subject_attribution_type"], "explicit_subject")
+        self.assertIn(correct["overall"]["level"], ("medium", "strong"))
 
 
 # ── Admission cross-check tests ───────────────────────────────────────────────
