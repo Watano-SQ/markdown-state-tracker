@@ -271,6 +271,7 @@ class LoggingSystemTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
              patch("layers.extractors.LLMExtractor", DummyExtractor), \
+             patch.object(main, "build_extraction_context_for_chunk", return_value={"document_title": "Article"}), \
              patch.object(main, "save_extraction", return_value=123), \
              patch.object(main, "mark_document_processed"):
             result = main.run_extraction(pending, verbose=False)
